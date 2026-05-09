@@ -1,0 +1,43 @@
+# Secrets - never commit
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Frontend (Vite/Node)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.local
+*.tsbuildinfo
+
+# Runtime / logs (uvicorn pid logs, etc.)
+.runtime/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
