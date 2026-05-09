@@ -1,0 +1,52 @@
+# Containerizes the FastAPI agent + bundled SPA. Ollama runs on the host
+# (not in a sibling container), which keeps Metal GPU acceleration available
+# on Apple Silicon and avoids shipping a multi-GB model image.
+#
+# Prereqs on the host (one-time):
+#   brew install ollama          # or install via your distro's package manager
+#   ollama serve &               # or use the Ollama desktop app
+#   ollama pull llama3:latest
+#   ollama pull nomic-embed-text
+#
+# Start with:
+#   docker compose up --build
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: x-agent/app:local
+    container_name: x-agent-app
+    environment:
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: llama3:latest
+      EMBEDDING_MODEL: nomic-embed-text
+      PERSONA_DIR: /data/personas
+      PYTEST_ADDOPTS: "-p no:cacheprovider"
+    env_file:
+      - path: .env
+        required: false
+    # `host-gateway` is the supported way to resolve host.docker.internal
+    # on Linux too, even though Mac Docker Desktop sets it automatically.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8000:8000"
+    volumes:
+      - persona_data:/data/personas
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+
+volumes:
+  persona_data:

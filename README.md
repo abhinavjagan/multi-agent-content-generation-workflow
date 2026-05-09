@@ -6,27 +6,158 @@ A LangGraph agent that drafts a short blog/article on a topic using a **local Ol
 topic --> generate (Ollama) --> format (single|thread) --> human review --> post to X
 ```
 
+> Want to skip installing Python and Node on your host? See [Quickstart with Docker](#quickstart-with-docker) below — one command runs the FastAPI agent and the SPA in a container while talking to Ollama on your host.
+
 ## Requirements
 
-- Python 3.10+
-- [Ollama](https://ollama.com/) running locally with at least one model pulled (default: `llama3:latest`).
-  ```bash
-  ollama pull llama3:latest
-  ollama serve   # usually started automatically by the desktop app
-  ```
-  Any tag from `ollama list` works; override with `OLLAMA_MODEL=...` in `.env` or `--model` on `x-agent draft`. Every command that calls Ollama runs a fast pre-flight and exits with a clear message if the configured tag isn't pulled.
-- An X developer app with **OAuth 1.0a User Context** tokens (read + write). See [docs.x.com/x-api](https://docs.x.com/x-api/introduction).
+> Going the Docker route? You only need **Ollama** (next bullet) and Docker — skip Python and Node, they aren't used on your host. Jump to [Quickstart with Docker](#quickstart-with-docker).
 
-## Install
+- **Python 3.10+** (3.11/3.12 also tested).
+- **[Ollama](https://ollama.com/)** running locally with these models pulled:
+  ```bash
+  ollama pull llama3:latest         # generation + persona consistency critic
+  ollama pull nomic-embed-text      # transcript retrieval (only needed for personas)
+  ollama serve                      # usually started automatically by the desktop app
+  ```
+  Any chat model tag from `ollama list` works; override the default with `OLLAMA_MODEL=...` in `.env` or `--model` on `x-agent draft`. Every command runs a fast pre-flight and exits with a clear message if the configured tag isn't pulled.
+- **Node.js 18+ and npm** — only if you want the web UI under `frontend/`. The CLI has no Node dependency.
+- **An X developer app** with **OAuth 1.0a User Context** tokens (read + write) — *optional*. Without them, every command and request runs in `--dry-run` mode. See [docs.x.com/x-api](https://docs.x.com/x-api/introduction).
+
+## Quickstart with Docker
+
+If you'd rather not install Python and Node on your host, you can run the FastAPI agent and the bundled SPA inside a container. **Ollama still runs on the host** — that keeps Metal GPU acceleration available on Apple Silicon (Docker on macOS can't reach Metal) and avoids baking multi-GB model weights into the image. The same compose file works on Linux as long as Ollama is running on the host.
+
+### Prereqs
 
 ```bash
-git clone <this repo>
-cd x-agent
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env
-# edit .env and fill in your X API tokens
+# 1) Install and start Ollama on the host
+brew install ollama          # or your distro's package manager
+ollama serve &               # or just open the Ollama desktop app
+ollama pull llama3:latest    # ~4.7 GB, generation + persona critic
+ollama pull nomic-embed-text # ~274 MB, persona retrieval
+
+# 2) Install Docker (Docker Desktop, Colima, or Docker Engine + the Compose plugin)
 ```
+
+### Run the stack
+
+```bash
+git clone https://github.com/abhinavjagan/multi-agent-content-generation-workflow.git
+cd multi-agent-content-generation-workflow
+docker compose up --build -d        # -d runs detached so this terminal stays free
+docker compose logs -f app          # optional: tail the app logs (Ctrl-C just stops the tail)
+```
+
+The first `up --build` takes ~2-5 minutes (one-time image build + Python deps); subsequent `docker compose up`s are instant. Drop `-d` if you'd rather watch the build attached — just remember the next CLI examples need a new terminal.
+
+Verify the app is healthy:
+
+```bash
+curl -s http://localhost:8000/api/health | python -m json.tool
+# → "ollama": { "ok": true, "available": ["llama3:latest", "nomic-embed-text"], ... }
+```
+
+If `ollama.ok` is `false`, the host-side Ollama daemon isn't running — start it with `ollama serve &` (or open the desktop app) and re-run the curl. Then open `http://localhost:8000` for the SPA. The app container reaches the host's Ollama daemon via `host.docker.internal:11434`; on Linux, compose adds `host-gateway` so the same hostname resolves to the host without any extra setup.
+
+The CLI runs inside the running container:
+
+```bash
+docker compose exec app x-agent draft "Why local LLMs matter in 2026" --mode thread --dry-run
+docker compose exec app x-agent persona create --name "Abhi" --handle abhi --quick
+docker compose exec app pytest -q   # 142 tests, fully offline
+```
+
+### Optional: enable real X posting and paid research providers
+
+Drop a `.env` next to `docker-compose.yml` (copy from `.env.example`) and fill in `X_API_KEY` / `TAVILY_API_KEY` / etc. The app picks it up automatically — no rebuild. Without `.env`, every command runs in dry-run and DuckDuckGo is the research provider, which is perfect for trying things out.
+
+### Persistence and cleanup
+
+| Volume | What's in it | Wiped by |
+| --- | --- | --- |
+| `persona_data` | persona spec + transcript + embeddings under `/data/personas` | `docker compose down -v` |
+
+Model weights live in your host's Ollama install (`~/.ollama/models`) and are not managed by Docker — they survive container resets and are shared with any other Ollama-using tool on the host. `docker compose down` (without `-v`) keeps `persona_data`, so a later `docker compose up` picks up your personas; `docker compose down -v` wipes them.
+
+### Container hardening
+
+The app container runs as a non-root user (uid 10001), with read-only root filesystem (`tmpfs` for `/tmp`), all Linux capabilities dropped, and `no-new-privileges` enabled — see [Dockerfile](Dockerfile) and [docker-compose.yml](docker-compose.yml).
+
+### Common ops
+
+```bash
+docker compose ps                    # service status + healthcheck state
+docker compose logs -f app           # tail app logs
+docker compose exec app sh           # shell into the app container
+docker compose build --no-cache app  # force a clean rebuild
+docker compose down                  # stop, keep persona volume
+docker compose down -v               # stop AND wipe persona volume
+```
+
+> **Why isn't Ollama in a container too?** It can be, but it's a bad trade for this project. Docker on macOS can't pass through Metal, so containerized Ollama is CPU-only and ~10× slower for chat models. On Linux you'd need an NVIDIA GPU plus the NVIDIA Container Toolkit to break even. Most users running Ollama already have it on the host anyway. Keeping the daemon out of compose keeps the image small, inference fast, and the model cache shared with anything else on the host.
+
+## Setup
+
+After cloning, three steps get you to a working dev environment:
+
+```bash
+git clone https://github.com/abhinavjagan/multi-agent-content-generation-workflow.git
+cd multi-agent-content-generation-workflow
+
+# 1) Backend: virtualenv + editable install (creates .venv/ and src/x_agent.egg-info/)
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+
+# 2) Frontend, only if you want the web UI (creates frontend/node_modules/)
+cd frontend && npm install && cd ..
+
+# 3) Configuration (creates .env from the template; never committed)
+cp .env.example .env
+$EDITOR .env
+```
+
+`.env.example` is the single source of truth for every knob. Skim it once; the four sections are:
+
+- **Ollama** *(required)*: `OLLAMA_BASE_URL`, `OLLAMA_MODEL`. Defaults work if Ollama is on the same host.
+- **X (Twitter) API** *(optional)*: `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET`. Leave blank to force every CLI/API call into dry-run.
+- **Persona clone** *(optional)*: `PERSONA_DIR` (default `~/.x-agent/personas`), `EMBEDDING_MODEL`, critic + retrieval tunables.
+- **Web research** *(optional)*: `RESEARCH_PROVIDER`, `TAVILY_API_KEY`, `BRAVE_SEARCH_API_KEY`, fetch limits. Without keys, DuckDuckGo is used automatically — no signup required.
+
+### Smoke test the setup
+
+```bash
+# backend tests (fully offline, no Ollama needed)
+pytest -q
+
+# end-to-end with real Ollama in dry-run (no X creds needed)
+python scripts/smoke.py "test topic" thread
+
+# frontend type-check + production bundle (only if you ran the frontend step)
+cd frontend && npm run typecheck && npm run build && cd ..
+```
+
+### What gets created on disk (and why it's gitignored)
+
+Everything below is recreated automatically by the steps above or by normal use, which is exactly why none of it lives in version control.
+
+| Path | Created by | Required for | Safe to delete? |
+| --- | --- | --- | --- |
+| `.env` | you (`cp .env.example .env`) | every command that reads config | NO — contains your secrets |
+| `.venv/` | `python -m venv .venv` | running anything | yes (rerun setup step 1) |
+| `src/x_agent.egg-info/` | `pip install -e .` | editable install metadata | yes (auto-recreated) |
+| `__pycache__/`, `*.pyc` | Python at import time | nothing user-facing | yes |
+| `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/` | the named tool | nothing user-facing | yes |
+| `frontend/node_modules/` | `npm install` | dev server + production build | yes (rerun setup step 2) |
+| `frontend/dist/` | `npm run build` | the bundled `uvicorn x_agent.server:app` deploy | yes |
+| `frontend/.vite/`, `*.tsbuildinfo` | Vite + tsc caches | nothing user-facing | yes |
+| `.runtime/`, `*.log` | optional server log redirection | nothing user-facing | yes |
+
+Persona artifacts (`~/.x-agent/personas/<id>/spec.json`, `transcript.jsonl`, `embeddings.npz`) live *outside* the repo at `PERSONA_DIR`. They aren't gitignored because they aren't in the repo at all — they're in your home directory. Back them up separately if you want to keep them.
+
+If you went the Docker route instead, the only path written under your repo is the build context Docker reads from disk; the app's state lives in a single Docker named volume (`persona_data`). Run `docker volume ls` to see it and `docker compose down -v` to wipe it. Model weights stay on your host (`~/.ollama/models`) since Ollama runs there, not in a container — see [Quickstart with Docker](#quickstart-with-docker) for the details.
+
+The remaining `.gitignore` entries (`build/`, `dist/`, `.eggs/`, `*.egg`, `*$py.class`, `.coverage`, `htmlcov/`, `frontend/*.local`, `.idea/`, `.vscode/`, `*.swp`, `.DS_Store`, `.env.*`) are Python sdist outputs, coverage reports, IDE / editor / OS artifacts, and parallel `.env` variants — none require user action and most appear only if you run a specific tool that creates them.
 
 ## Usage
 
@@ -90,8 +221,7 @@ There is a polished React + Vite + TypeScript SPA under `frontend/` that
 covers every flow (draft + HITL review, persona list / interview / refine /
 eval, settings + health dashboard).
 
-Dev mode runs the API on `:8000` and the Vite dev server on `:5173`. Vite
-proxies `/api` to the API, so it's same-origin from the browser's POV.
+Assuming you ran step 2 of [Setup](#setup), dev mode runs the API on `:8000` and the Vite dev server on `:5173`. Vite proxies `/api` to the API, so it's same-origin from the browser's POV.
 
 ```bash
 # one-shot: start both with hot-reload (Ctrl-C kills both)
@@ -99,14 +229,13 @@ proxies `/api` to the API, so it's same-origin from the browser's POV.
 
 # or, in two terminals
 uvicorn x_agent.server:app --reload --host 127.0.0.1
-cd frontend && npm install && npm run dev
+cd frontend && npm run dev
 ```
 
-For a single-process production deploy, build the SPA once and FastAPI will
-mount it at `/` via `StaticFiles`:
+For a single-process production deploy, build the SPA once and FastAPI will mount it at `/` via `StaticFiles`:
 
 ```bash
-cd frontend && npm install && npm run build
+cd frontend && npm run build && cd ..
 uvicorn x_agent.server:app --host 127.0.0.1
 # -> open http://127.0.0.1:8000
 ```
@@ -231,10 +360,7 @@ interview (Phase A)                   draft (Phase B)
 
 ### Prereqs
 
-```bash
-ollama pull llama3:latest         # or your chat model of choice; matches OLLAMA_MODEL default
-ollama pull nomic-embed-text      # used for transcript retrieval
-```
+The Ollama models from [Requirements](#requirements) cover everything the persona path needs (`llama3:latest` for chat + critic, `nomic-embed-text` for transcript retrieval). No extra setup beyond the main [Setup](#setup) — persona artifacts land in `PERSONA_DIR` (default `~/.x-agent/personas/`).
 
 ### CLI
 

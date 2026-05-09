@@ -1,0 +1,54 @@
+# Keep the Docker build context small. Mirror the repo .gitignore plus
+# anything the image rebuilds from source (frontend/dist, node_modules) so
+# we don't accidentally bake stale artifacts.
+
+# VCS
+.git/
+.gitignore
+.gitattributes
+
+# Python virtualenvs and build artifacts
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+
+# Test / type-check / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Frontend artifacts that the image rebuilds from source
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.local
+*.tsbuildinfo
+
+# Runtime / logs
+.runtime/
+*.log
+
+# Secrets - never bake into an image. Allow .env.example as documentation.
+.env
+.env.*
+!.env.example
+
+# IDE / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Docs that aren't needed at runtime (kept commented; README is small and
+# nice to have inside the image for `docker compose exec app cat README.md`).
+# README.md
