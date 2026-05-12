@@ -45,9 +45,15 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # curl is used by the HEALTHCHECK below; ca-certificates keeps outbound HTTPS
-# (Ollama health probe, research providers when enabled) honest.
+# (Ollama health probe, research providers when enabled) honest. ffmpeg is
+# required by faster-whisper (the voice STT engine) to decode the webm/ogg/
+# mp4 audio MediaRecorder produces; libsndfile1 is what soundfile (a
+# transitive dep of kokoro-onnx examples) and Whisper's resamplers link
+# against on Debian. espeak-ng is the phonemizer backend Kokoro depends on
+# at runtime; without it TTS synthesis fails with a phonemizer error.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates \
+ && apt-get install -y --no-install-recommends \
+        curl ca-certificates ffmpeg libsndfile1 espeak-ng \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -66,10 +72,12 @@ RUN pip install -e .
 COPY --from=web /web/dist /app/frontend/dist
 
 # Non-root user. /data/personas is the writable persona volume mount target;
-# /app stays read-only at runtime (root FS in compose is also read-only).
+# /data/models is the model cache volume (Kokoro ONNX + faster-whisper
+# weights). /app stays read-only at runtime (root FS in compose is also
+# read-only) -- everything mutable lives under /data or /tmp (tmpfs).
 RUN groupadd --gid 10001 app \
  && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin app \
- && mkdir -p /data/personas \
+ && mkdir -p /data/personas /data/models \
  && chown -R app:app /app /data
 USER app
 
@@ -79,7 +87,8 @@ USER app
 ENV PERSONA_DIR=/data/personas \
     OLLAMA_BASE_URL=http://host.docker.internal:11434 \
     OLLAMA_MODEL=llama3:latest \
-    EMBEDDING_MODEL=nomic-embed-text
+    EMBEDDING_MODEL=nomic-embed-text \
+    VOICE_MODEL_DIR=/data/models
 
 EXPOSE 8000
 

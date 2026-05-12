@@ -26,6 +26,18 @@ dependencies = [
     "httpx>=0.27,<1.0",
     "ddgs>=9.0,<10.0",
     "trafilatura>=2.0,<3.0",
+    # Voice pipeline (optional at runtime: endpoints degrade gracefully when
+    # the engines fail to load, e.g. on a host without the models cached).
+    "faster-whisper>=1.0,<2.0",
+    "kokoro-onnx>=0.4,<1.0",
+    "python-multipart>=0.0.9,<1.0",
+    # truststore makes Python's `ssl` module use the host OS trust store
+    # (macOS Keychain, Windows cert store, Linux p11-kit) instead of the
+    # `certifi` bundle. Critical for hosts behind corporate TLS-intercepting
+    # proxies (Zscaler, Cisco Secure Access) where the keychain has the
+    # internal root but `certifi` does not. Scoped to the host-side voice
+    # sidecar -- the container path never makes outbound HTTPS for voice.
+    "truststore>=0.10,<1.0",
 ]
 
 [project.optional-dependencies]

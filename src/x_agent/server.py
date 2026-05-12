@@ -29,9 +29,10 @@ from pathlib import Path
 from typing import Any, Iterator, Literal, Optional
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request, UploadFile
+from fastapi import File as FileParam
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.types import Command
 from pydantic import BaseModel, Field
@@ -51,6 +52,9 @@ from .persona.questions import all_questions, by_dimension, quick_questions
 from .persona.schema import PersonaSpec, TranscriptEntry, utcnow
 from .persona.store import PersonaNotFoundError, PersonaWriteError, get_default_store
 from .research import provider_name as resolve_provider_name
+from .voice import KokoroTTS, VoiceEngineError, VoiceEngineUnavailable, WhisperSTT
+from .voice import proxy as voice_proxy
+from .voice.security import RateLimiter, client_key, validate_audio_upload
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +77,34 @@ app.add_middleware(
 
 _graph = build_graph()
 _interview_graph = build_interview_graph()
+
+# Voice rate limiter: 5-minute sliding window. Created lazily on first
+# request so a config reload picks up the new ceiling.
+_voice_rate_limiter: Optional[RateLimiter] = None
+
+
+def _get_voice_rate_limiter() -> RateLimiter:
+    global _voice_rate_limiter
+    if _voice_rate_limiter is None:
+        _voice_rate_limiter = RateLimiter(
+            max_per_window=get_settings().voice_rate_limit_per_5min,
+            window_seconds=300,
+        )
+    return _voice_rate_limiter
+
+
+def _enforce_voice_rate_limit(request: Request) -> None:
+    """Apply the voice rate limit; raise 429 on deny."""
+    if not get_settings().voice_enabled:
+        raise HTTPException(status_code=503, detail="voice pipeline is disabled")
+    key = client_key(request.client.host if request.client else None)
+    allowed, retry_after = _get_voice_rate_limiter().allow(key)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="voice rate limit exceeded",
+            headers={"Retry-After": str(max(1, int(retry_after)))},
+        )
 
 
 # ---------------------------------------------------------------- request models
@@ -230,7 +262,13 @@ class PersonaCreateRequest(BaseModel):
     is_real_person: bool = True
     disclosure_text: str = Field(default="", max_length=120)
     consent_ack: bool = False
+    # Legacy boolean kept for back-compat with older clients.
     quick: bool = False
+    # Preferred over ``quick``. When provided, takes precedence.
+    #   quick   ~6 questions (the existing fast path)
+    #   default ~26 questions (the full standard bank)
+    #   deep    ~40 questions + aggressive follow-ups (recommended with voice)
+    mode: Optional[Literal["quick", "default", "deep"]] = None
 
 
 class PersonaQuestion(BaseModel):
@@ -312,6 +350,31 @@ class HealthResponse(BaseModel):
     ollama: dict[str, Any]
     personas: dict[str, Any]
     config: dict[str, Any]
+    voice: dict[str, Any]
+
+
+class VoiceSpeakRequest(BaseModel):
+    """Body for ``POST /api/voice/speak``.
+
+    ``text`` is hard-capped via the configured ``voice_tts_max_chars``;
+    we expose 2000 here as the absolute Pydantic ceiling and re-validate
+    against the runtime setting inside the engine.
+    """
+
+    text: str = Field(..., min_length=1, max_length=2000)
+    voice: Optional[str] = Field(
+        default=None, max_length=40, pattern=r"^[a-z]{2}_[a-z0-9_]+$"
+    )
+    speed: Optional[float] = Field(default=None, ge=0.5, le=2.0)
+    lang: Optional[str] = Field(
+        default=None, max_length=10, pattern=r"^[a-z]{2}-[a-z]{2}$"
+    )
+
+
+class VoiceTranscribeResponse(BaseModel):
+    text: str
+    duration_s: float
+    model: str
 
 
 DEFAULT_EVAL_PROMPTS = [
@@ -435,6 +498,49 @@ def _persona_summary(spec: PersonaSpec) -> PersonaSummary:
 # -------------------------------------------------------------------- /api/health
 
 
+def _voice_status(settings: Any) -> dict[str, Any]:
+    """Report voice pipeline readiness for ``/api/health``.
+
+    Never triggers a model download or engine load -- only inspects the
+    cache directory (local mode) or pings ``/health`` on the sidecar
+    (remote mode). The UI uses this to hide voice controls when the
+    pipeline isn't ready, which keeps the typed flow unaffected.
+    """
+    base: dict[str, Any] = {
+        "enabled": bool(settings.voice_enabled),
+        "stt_model": settings.voice_stt_model,
+        "tts_voice": settings.voice_tts_voice,
+        "tts_lang": settings.voice_tts_lang,
+        "max_audio_bytes": settings.voice_max_audio_bytes,
+        "max_audio_seconds": settings.voice_max_audio_seconds,
+        "tts_max_chars": settings.voice_tts_max_chars,
+        "backend": "local",
+        "remote_url": "",
+    }
+
+    remote = (settings.voice_remote_url or "").strip()
+    if remote:
+        # Remote sidecar mode: ask it. Never raises.
+        info = voice_proxy.health()
+        base["backend"] = "remote"
+        base["remote_url"] = remote
+        base["stt_ready"] = bool(info.get("stt_ready", False)) and bool(info.get("ok", False))
+        base["tts_ready"] = bool(info.get("tts_ready", False)) and bool(info.get("ok", False))
+        if not info.get("ok", False):
+            base["error"] = str(info.get("error", "sidecar unreachable"))[:200]
+        return base
+
+    try:
+        base["tts_ready"] = KokoroTTS.get().is_ready()
+    except Exception:  # noqa: BLE001
+        base["tts_ready"] = False
+    try:
+        base["stt_ready"] = WhisperSTT.get().is_ready()
+    except Exception:  # noqa: BLE001
+        base["stt_ready"] = False
+    return base
+
+
 def _research_status(settings: Any) -> dict[str, Any]:
     """Booleans and counts only -- never the actual API keys."""
     has_tavily = settings.tavily_api_key is not None and bool(
@@ -473,6 +579,7 @@ def health() -> HealthResponse:
             "persona_top_k": settings.persona_top_k,
             "research": _research_status(settings),
         },
+        voice=_voice_status(settings),
     )
 
 
@@ -822,6 +929,7 @@ def start_persona_interview(req: PersonaCreateRequest) -> PersonaInterviewState:
         disclosure_text=req.disclosure_text,
         consent_ack=req.consent_ack,
         quick=req.quick,
+        mode=req.mode,
     )
     try:
         state = _interview_graph.invoke(dict(state_in), config=_config(thread_id))
@@ -1140,6 +1248,143 @@ def eval_persona(persona_id: str, req: EvalRequest) -> StreamingResponse:
             "Cache-Control": "no-store",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+# --------------------------------------------------------------- /api/voice/*
+
+
+_VOICE_NO_STORE_HEADERS = {
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+}
+
+
+@app.post("/api/voice/speak")
+async def voice_speak(req: VoiceSpeakRequest, request: Request) -> Response:
+    """Synthesize ``req.text`` to a WAV blob using Kokoro-82M.
+
+    Returns ``audio/wav`` bytes with ``Cache-Control: no-store``. The
+    engine is loaded lazily on first call; subsequent calls with the
+    same text/voice/speed/lang are served from an in-memory LRU.
+    """
+    _enforce_voice_rate_limit(request)
+    settings = get_settings()
+    text = (req.text or "").strip()
+    if len(text) > settings.voice_tts_max_chars:
+        raise HTTPException(
+            status_code=413,
+            detail=f"text too long (max {settings.voice_tts_max_chars} chars)",
+        )
+
+    try:
+        if voice_proxy.remote_url():
+            # Sidecar mode: host-side service handles the model + decode.
+            wav = await asyncio.to_thread(
+                voice_proxy.speak,
+                text,
+                voice=req.voice,
+                speed=req.speed,
+                lang=req.lang,
+            )
+        else:
+            wav = await asyncio.to_thread(
+                KokoroTTS.get().synthesize,
+                text,
+                voice=req.voice,
+                speed=req.speed,
+                lang=req.lang,
+            )
+    except VoiceEngineUnavailable as exc:
+        log.warning("voice.speak unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503, detail=f"TTS engine unavailable: {exc}"
+        ) from exc
+    except VoiceEngineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return Response(
+        content=wav,
+        media_type="audio/wav",
+        headers=_VOICE_NO_STORE_HEADERS,
+    )
+
+
+@app.post(
+    "/api/voice/transcribe",
+    response_model=VoiceTranscribeResponse,
+)
+async def voice_transcribe(
+    request: Request,
+    audio: UploadFile = FileParam(...),
+) -> VoiceTranscribeResponse:
+    """Transcribe an uploaded audio blob via faster-whisper.
+
+    Expects a single multipart ``audio`` field. Bytes are buffered in
+    memory (capped), validated by magic-byte sniffing, then dispatched
+    to a worker thread. The raw audio is never written to a persistent
+    location and is unlinked from /tmp immediately after transcription.
+    """
+    _enforce_voice_rate_limit(request)
+    settings = get_settings()
+    content_type = audio.content_type or ""
+
+    # Read the body with a hard ceiling. ``UploadFile.read(n)`` returns
+    # at most n bytes; if more arrive we reject with 413. We refuse to
+    # buffer the rest -- the SpooledTemporaryFile would silently spill
+    # to disk via tempfile, and we want body-size enforcement at the
+    # *network* boundary.
+    cap = int(settings.voice_max_audio_bytes)
+    body = await audio.read(cap + 1)
+    if len(body) > cap:
+        raise HTTPException(
+            status_code=413,
+            detail=f"audio body too large (>{cap} bytes)",
+        )
+
+    suffix = validate_audio_upload(
+        content_type=content_type,
+        body=body,
+        max_bytes=cap,
+    )
+
+    try:
+        if voice_proxy.remote_url():
+            # Sidecar mode: forward the *already-validated* bytes. The
+            # sidecar re-runs the same allowlist + magic-byte sniff
+            # before invoking faster-whisper.
+            text, duration = await asyncio.to_thread(
+                voice_proxy.transcribe, body, content_type=content_type
+            )
+        else:
+            text, duration = await asyncio.to_thread(
+                WhisperSTT.get().transcribe, body, suffix=suffix
+            )
+    except VoiceEngineUnavailable as exc:
+        log.warning("voice.transcribe unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503, detail=f"STT engine unavailable: {exc}"
+        ) from exc
+    except VoiceEngineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Duration cap is post-decode: ffmpeg has already inspected the file
+    # by the time faster-whisper gives us info.duration. We still return
+    # what we transcribed because re-uploading would just blow the limit
+    # again -- but we surface the cap as a 413 if we exceed it.
+    if duration > settings.voice_max_audio_seconds:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"audio duration too long ({duration:.1f}s > "
+                f"{settings.voice_max_audio_seconds}s)"
+            ),
+        )
+
+    return VoiceTranscribeResponse(
+        text=text,
+        duration_s=float(duration),
+        model=settings.voice_stt_model,
     )
 
 

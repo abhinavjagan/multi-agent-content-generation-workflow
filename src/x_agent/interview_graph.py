@@ -15,7 +15,7 @@ resumes it with ``Command(resume={"answer": "<text>"})``.
 from __future__ import annotations
 
 import logging
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -26,7 +26,7 @@ from .persona.interview import (
     extract_persona_spec,
     judge_answer_completeness,
 )
-from .persona.questions import all_questions, quick_questions
+from .persona.questions import all_questions, deep_questions, quick_questions
 from .persona.schema import (
     PersonaSpec,
     TranscriptEntry,
@@ -38,7 +38,11 @@ from .persona.store import get_default_store
 log = logging.getLogger(__name__)
 
 
+InterviewMode = Literal["quick", "default", "deep"]
+
+
 MAX_FOLLOWUPS_PER_DIMENSION = 2
+MAX_FOLLOWUPS_PER_DIMENSION_DEEP = 3
 
 
 class InterviewState(TypedDict, total=False):
@@ -47,7 +51,10 @@ class InterviewState(TypedDict, total=False):
     is_real_person: bool
     disclosure_text: str
     consent_ack: bool
+    # Legacy boolean kept for back-compat. New callers should set ``mode``.
     quick: bool
+    # 'quick' (~6 Qs), 'default' (~26 Qs), 'deep' (~40 Qs + aggressive follow-ups).
+    mode: InterviewMode
 
     question_index: int
     pending_question: dict | None
@@ -64,26 +71,63 @@ class InterviewState(TypedDict, total=False):
 # ----------------------------------------------------------------------- nodes
 
 
+def _resolve_mode(state: InterviewState | None) -> InterviewMode:
+    """Map the (mode, quick) inputs to a single canonical mode.
+
+    Back-compat: ``quick=True`` without an explicit ``mode`` still works
+    and is treated as ``mode='quick'``. An explicit ``mode`` always wins.
+    """
+    if not state:
+        return "default"
+    mode = state.get("mode")
+    if mode in ("quick", "default", "deep"):
+        return mode  # type: ignore[return-value]
+    if state.get("quick"):
+        return "quick"
+    return "default"
+
+
 def _bank(state: InterviewState | None = None) -> list:
-    if state and state.get("quick"):
+    mode = _resolve_mode(state)
+    if mode == "quick":
         return quick_questions()
+    if mode == "deep":
+        return deep_questions()
     return all_questions()
 
 
+def _followup_cap(state: InterviewState | None) -> int:
+    return (
+        MAX_FOLLOWUPS_PER_DIMENSION_DEEP
+        if _resolve_mode(state) == "deep"
+        else MAX_FOLLOWUPS_PER_DIMENSION
+    )
+
+
 def ask_next_question(state: InterviewState) -> Command:
-    """Ask either a queued follow-up or the next bank question, then pause."""
+    """Ask either a queued follow-up or the next bank question, then pause.
+
+    ``question_index`` always points at the *current* bank entry -- the one
+    we are about to ask, or the one we just answered while ``pending_followup``
+    is queued. ``judge_followup`` only advances the index when it decides the
+    answer was sufficient, so a queued follow-up shares the dimension /
+    kind of ``bank[idx]`` (not ``bank[idx - 1]``).
+    """
     bank = _bank(state)
     idx = int(state.get("question_index", 0))
     pending_followup = state.get("pending_followup")
     transcript = list(state.get("transcript") or [])
 
-    if pending_followup is not None and idx > 0:
-        # The follow-up always belongs to the dimension of the previous Q.
-        prev = bank[min(idx - 1, len(bank) - 1)]
+    if pending_followup is not None:
+        # Follow-up belongs to the dimension of the question we just
+        # answered, which is at bank[idx]. Clamp defensively in case
+        # idx has somehow run off the end (it shouldn't -- judge_followup
+        # routes to extract once we're past the bank).
+        base = bank[min(idx, len(bank) - 1)]
         question = {
-            "dimension": prev.dimension,
+            "dimension": base.dimension,
             "prompt": pending_followup,
-            "kind": prev.kind,
+            "kind": base.kind,
             "is_followup": True,
         }
     else:
@@ -184,7 +228,7 @@ def judge_followup(state: InterviewState) -> Command:
             goto=("extract" if idx + 1 >= len(bank) else "ask_next_question"),
         )
 
-    if used >= MAX_FOLLOWUPS_PER_DIMENSION:
+    if used >= _followup_cap(state):
         return Command(
             update={
                 "question_index": idx + 1,
@@ -203,7 +247,11 @@ def judge_followup(state: InterviewState) -> Command:
         prompt=pending.get("prompt", ""),
         kind=pending.get("kind", "open"),
     )
-    judgement = judge_answer_completeness(question=q, answer=last["answer"])
+    judgement = judge_answer_completeness(
+        question=q,
+        answer=last["answer"],
+        aggressive=(_resolve_mode(state) == "deep"),
+    )
     if judgement.get("sufficient", True) or not judgement.get("followup"):
         return Command(
             update={
@@ -340,14 +388,21 @@ def initial_interview_state(
     consent_ack: bool,
     persona_id: str | None = None,
     quick: bool = False,
+    mode: InterviewMode | None = None,
 ) -> InterviewState:
+    # Back-compat: explicit ``mode`` always wins; ``quick=True`` collapses
+    # to ``mode='quick'`` when nothing else was provided.
+    resolved: InterviewMode = mode if mode in ("quick", "default", "deep") else (
+        "quick" if quick else "default"
+    )
     return InterviewState(
         persona_id=persona_id or new_persona_id(name),
         name=name,
         is_real_person=is_real_person,
         disclosure_text=disclosure_text,
         consent_ack=consent_ack,
-        quick=quick,
+        quick=(resolved == "quick"),
+        mode=resolved,
         question_index=0,
         pending_followup=None,
         followups_used={},
@@ -356,8 +411,10 @@ def initial_interview_state(
 
 
 __all__ = [
+    "InterviewMode",
     "InterviewState",
     "build_interview_graph",
     "initial_interview_state",
     "MAX_FOLLOWUPS_PER_DIMENSION",
+    "MAX_FOLLOWUPS_PER_DIMENSION_DEEP",
 ]

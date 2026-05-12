@@ -119,6 +119,104 @@ class Settings(BaseSettings):
         description="Truncation cap for extracted article text per source.",
     )
 
+    # --- Voice pipeline (TTS + STT, optional) ---
+    # All-local: Kokoro-82M (ONNX) for TTS, faster-whisper for STT. Both
+    # engines are lazy-loaded; if either fails to initialise the endpoints
+    # return 503 and the UI hides voice controls -- the text-only flow keeps
+    # working unchanged.
+    voice_enabled: bool = Field(
+        default=True,
+        description=(
+            "Master switch. When false, /api/voice/* endpoints return 503 and "
+            "the UI hides mic / TTS controls; the typed-answer flow is unaffected."
+        ),
+    )
+    voice_stt_model: str = Field(
+        default="small.en",
+        max_length=80,
+        description=(
+            "faster-whisper model tag (e.g. 'tiny.en', 'base.en', 'small.en', "
+            "'small'). English-only tags are ~30% smaller. Downloaded on first "
+            "use to VOICE_MODEL_DIR."
+        ),
+    )
+    voice_stt_compute_type: str = Field(
+        default="int8",
+        pattern="^(int8|int8_float16|int8_float32|float16|float32)$",
+        description=(
+            "CTranslate2 compute precision for Whisper. 'int8' is the smallest "
+            "and runs on CPU; bump to 'float16' if you have a GPU configured."
+        ),
+    )
+    voice_tts_voice: str = Field(
+        default="am_michael",
+        max_length=40,
+        pattern=r"^[a-z]{2}_[a-z0-9_]+$",
+        description=(
+            "Kokoro voice id (see hexgrad/Kokoro-82M VOICES.md). Defaults to "
+            "'am_michael' (American male, clean). Common alternatives: "
+            "'am_adam' (am, deeper), 'bm_george' (British male), "
+            "'af_bella' (American female, warm), 'af_sarah' (American female, neutral)."
+        ),
+    )
+    voice_tts_speed: float = Field(
+        default=1.0, ge=0.5, le=2.0,
+        description="Kokoro synthesis speed multiplier.",
+    )
+    voice_tts_lang: str = Field(
+        default="en-us",
+        max_length=10,
+        pattern=r"^[a-z]{2}-[a-z]{2}$",
+        description="Kokoro language code (e.g. 'en-us', 'en-gb').",
+    )
+    voice_model_dir: str = Field(
+        default="~/.x-agent/models",
+        description=(
+            "Where faster-whisper + Kokoro ONNX weights are cached. Must be "
+            "writable -- in Docker this maps to the model_cache volume."
+        ),
+    )
+    voice_remote_url: str = Field(
+        default="",
+        max_length=200,
+        description=(
+            "Optional URL of a host-side voice sidecar (see scripts/voice_server.py). "
+            "When set, /api/voice/* proxy to this URL instead of loading Kokoro / "
+            "faster-whisper inside the container. Useful behind corporate TLS "
+            "interception where the host trust chain differs from the container's. "
+            "Inside docker-compose this is set to http://host.docker.internal:8765."
+        ),
+    )
+    voice_max_audio_bytes: int = Field(
+        default=8_000_000, ge=10_000, le=64_000_000,
+        description=(
+            "Hard cap on uploaded audio body size for /api/voice/transcribe. "
+            "Anything larger returns 413 before the file hits disk."
+        ),
+    )
+    voice_max_audio_seconds: int = Field(
+        default=120, ge=5, le=600,
+        description=(
+            "Post-decode audio duration cap. Whisper runtime is roughly linear "
+            "in duration; this stops a 100MB-but-short file from running for "
+            "ten minutes."
+        ),
+    )
+    voice_tts_max_chars: int = Field(
+        default=800, ge=50, le=2000,
+        description=(
+            "Per-request synthesis text cap for /api/voice/speak. Bounds CPU "
+            "time and prevents abuse of the TTS endpoint."
+        ),
+    )
+    voice_rate_limit_per_5min: int = Field(
+        default=20, ge=1, le=500,
+        description=(
+            "In-process per-client-IP rate limit for /api/voice/* "
+            "(token bucket, 5-minute window)."
+        ),
+    )
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

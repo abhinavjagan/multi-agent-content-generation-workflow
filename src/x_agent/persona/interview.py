@@ -33,6 +33,21 @@ _JUDGE_SYSTEM = (
 )
 
 
+_JUDGE_SYSTEM_AGGRESSIVE = (
+    "You judge whether an interview answer is rich enough to capture a person's "
+    "trait, in DEEP mode where we want the persona to be as vivid as possible. "
+    "Reply ONLY with strict JSON: "
+    '{"sufficient": true|false, "followup": "<question>"|null, "reason": "<short>"}\n'
+    "Sufficient ONLY when the answer has BOTH (a) at least one concrete, "
+    "verbatim example or anecdote and (b) some hint at the WHY behind the "
+    "behaviour. If either is missing, set sufficient=false and propose a "
+    "follow-up that explicitly asks for the missing half (e.g. 'Can you give "
+    "a real example -- a sentence you'd actually say?' or 'What's the reason "
+    "you reach for that move?'). Keep follow-ups short, conversational, and "
+    "easy to answer out loud."
+)
+
+
 _EXTRACT_SYSTEM = (
     "You convert an interview transcript into a structured JSON persona. "
     "Output STRICT JSON only - no preamble, no markdown, no code fences. "
@@ -138,20 +153,29 @@ def judge_answer_completeness(
     question: Question,
     answer: str,
     model: str | None = None,
+    aggressive: bool = False,
 ) -> dict[str, Any]:
     """Return ``{"sufficient": bool, "followup": str|None, "reason": str}``.
 
     Generative answers are always sufficient (the answer IS the artifact we
     wanted). One-shot LLM call with strict JSON output; on parse failure we
     treat the answer as sufficient (fail open: don't trap the user in loops).
+
+    When ``aggressive=True`` (deep mode), use a stricter system prompt that
+    pushes harder for a concrete example + a why, and raise the minimum
+    answer length so very short answers always get probed.
     """
     if question.kind == "generative":
         return {"sufficient": True, "followup": None, "reason": "generative_probe"}
-    if not answer or len(answer.strip()) < 30:
+    min_chars = 60 if aggressive else 30
+    if not answer or len(answer.strip()) < min_chars:
         return {
             "sufficient": False,
             "followup": (
-                "Could you expand on that with a concrete example or two?"
+                "Can you give me a real example -- something you'd actually "
+                "say or do, and the reason behind it?"
+                if aggressive
+                else "Could you expand on that with a concrete example or two?"
             ),
             "reason": "too_short",
         }
@@ -160,9 +184,10 @@ def judge_answer_completeness(
         f"Question: {question.prompt}\n"
         f"Answer: {answer.strip()}\n"
     )
+    system_msg = _JUDGE_SYSTEM_AGGRESSIVE if aggressive else _JUDGE_SYSTEM
     try:
         resp = _llm(model).invoke(
-            [SystemMessage(content=_JUDGE_SYSTEM), HumanMessage(content=user)]
+            [SystemMessage(content=system_msg), HumanMessage(content=user)]
         )
         data = extract_json(resp.content or "")
         return {

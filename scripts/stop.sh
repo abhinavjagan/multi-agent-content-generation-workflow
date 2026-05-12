@@ -48,3 +48,8 @@ else
   $DOCKER_COMPOSE down
   ok "stopped; persona_data preserved"
 fi
+
+# Stop the host-side voice sidecar too (idempotent: no-op if not running).
+if [ -x ./scripts/stop_voice.sh ]; then
+  ./scripts/stop_voice.sh || true
+fi

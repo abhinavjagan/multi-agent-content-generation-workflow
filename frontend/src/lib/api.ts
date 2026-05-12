@@ -208,6 +208,79 @@ export const putPersonaPersonality = (
     },
   );
 
+// ---------------------------------------------------------------- voice
+
+export interface VoiceSpeakRequest {
+  text: string;
+  voice?: string | null;
+  speed?: number | null;
+  lang?: string | null;
+}
+
+export interface VoiceTranscribeResponse {
+  text: string;
+  duration_s: number;
+  model: string;
+}
+
+/**
+ * Synthesize `text` to a WAV `Blob` via Kokoro-82M. Throws `ApiError` on
+ * non-2xx (503 if the engine isn't ready). The caller is responsible
+ * for playback / cleanup; see `playWavBlob` in lib/voice.ts.
+ */
+export async function speak(req: VoiceSpeakRequest): Promise<Blob> {
+  const res = await fetch(`${BASE}/voice/speak`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "audio/wav",
+    },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const data = await res.json();
+      if (data && typeof data === "object" && "detail" in data) {
+        const d = (data as { detail: unknown }).detail;
+        detail = typeof d === "string" ? d : JSON.stringify(d);
+      }
+    } catch {
+      // ignore
+    }
+    throw new ApiError(`${res.status} ${detail}`, res.status, detail);
+  }
+  return res.blob();
+}
+
+/**
+ * Send a recorded audio Blob to the server for transcription.
+ *
+ * Single `audio` multipart field. Server enforces size + duration caps
+ * and content-type allowlist; we pass through whatever MediaRecorder
+ * produced.
+ */
+export async function transcribe(
+  blob: Blob,
+): Promise<VoiceTranscribeResponse> {
+  const form = new FormData();
+  // Server-generated filename on the backend; the multipart filename
+  // here is decorative (Whisper sniffs by content). We still send
+  // something so middleware that requires a filename is happy.
+  const ext = blob.type.includes("ogg")
+    ? "ogg"
+    : blob.type.includes("mp4")
+      ? "mp4"
+      : blob.type.includes("wav")
+        ? "wav"
+        : "webm";
+  form.append("audio", blob, `answer.${ext}`);
+  return request<VoiceTranscribeResponse>("/voice/transcribe", {
+    method: "POST",
+    body: form,
+  });
+}
+
 // --------------------------------------------------------------- eval (SSE)
 
 export interface StreamEvalHandlers {

@@ -24,6 +24,14 @@ services:
       OLLAMA_MODEL: llama3:latest
       EMBEDDING_MODEL: nomic-embed-text
       PERSONA_DIR: /data/personas
+      VOICE_MODEL_DIR: /data/models
+      # Proxy /api/voice/* to the host-side sidecar (scripts/voice_server.py).
+      # Matches the Ollama pattern: heavy ML models live on the host, the
+      # container just makes loopback HTTP calls. This avoids running model
+      # downloads from inside the container, which is important behind
+      # corporate TLS interception (Zscaler, Cisco Secure Access, etc).
+      # Override to "" to fall back to in-container engines.
+      VOICE_REMOTE_URL: http://host.docker.internal:8765
     env_file:
       - path: .env
         required: false
@@ -35,6 +43,10 @@ services:
       - "8000:8000"
     volumes:
       - persona_data:/data/personas
+      # Caches the Kokoro-82M ONNX TTS weights + faster-whisper STT model.
+      # Survives container restarts; first launch downloads ~350 MB total.
+      # Read-only root FS means model files MUST live on a mounted volume.
+      - model_cache:/data/models
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
       interval: 30s
@@ -46,7 +58,11 @@ services:
     cap_drop: ["ALL"]
     read_only: true
     tmpfs:
+      # noexec is fine: voice now runs in the host-side sidecar (see
+      # VOICE_REMOTE_URL). The container never extracts shared objects
+      # at runtime.
       - /tmp:size=64m
 
 volumes:
   persona_data:
+  model_cache:

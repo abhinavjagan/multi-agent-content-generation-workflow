@@ -114,6 +114,37 @@ if [ "$PULL_ONLY" -eq 1 ]; then
   exit 0
 fi
 
+# ----------------------------------------------------------------- prereq: voice sidecar
+# Voice (Kokoro TTS + faster-whisper STT) lives on the HOST -- same pattern
+# as Ollama -- so the container never needs to download from HuggingFace /
+# GitHub behind corporate TLS interception. Skipped only if voice is
+# explicitly disabled in .env.
+VOICE_ENABLED_VAL="${VOICE_ENABLED:-true}"
+if [ -f .env ] && grep -E '^VOICE_ENABLED=' .env >/dev/null 2>&1; then
+  VOICE_ENABLED_VAL="$(grep -E '^VOICE_ENABLED=' .env | tail -n1 | cut -d= -f2)"
+fi
+VOICE_ENABLED_LC="$(printf '%s' "$VOICE_ENABLED_VAL" | tr '[:upper:]' '[:lower:]')"
+case "$VOICE_ENABLED_LC" in
+  false|0|no) START_VOICE=0 ;;
+  *)          START_VOICE=1 ;;
+esac
+
+if [ "$START_VOICE" -eq 1 ]; then
+  if [ -x ./scripts/start_voice.sh ]; then
+    info "starting voice sidecar (Kokoro TTS + faster-whisper STT) on host…"
+    if ./scripts/start_voice.sh; then
+      ok "voice sidecar ready at http://127.0.0.1:8765"
+    else
+      warn "voice sidecar failed to start; the app will still run but voice will be unavailable."
+      warn "see .runtime/voice_sidecar.log for details, or set VOICE_ENABLED=false in .env."
+    fi
+  else
+    warn "scripts/start_voice.sh not found / not executable; skipping voice sidecar."
+  fi
+else
+  dim "VOICE_ENABLED=false -- skipping voice sidecar."
+fi
+
 # ----------------------------------------------------------------- .env scaffold
 if [ ! -f .env ]; then
   if [ -f .env.example ]; then
@@ -160,3 +191,8 @@ printf '  %s  %s\n' "Health:" "$HEALTH_URL"
 printf '  %s  %s\n' "Stop:  " "./scripts/stop.sh"
 printf '  %s  %s\n' "Logs:  " "$DOCKER_COMPOSE logs -f app"
 printf '\n%s\n' "${DIM}Personas live on a docker volume; back them up with 'docker volume export persona_data'.${RESET}"
+if [ "$START_VOICE" -eq 1 ]; then
+  printf '%s\n' "${DIM}Voice (TTS + STT) runs in a host-side sidecar on :8765 (logs:${RESET}"
+  printf '%s\n' "${DIM}  .runtime/voice_sidecar.log). First /api/voice/* request downloads${RESET}"
+  printf '%s\n' "${DIM}  ~350 MB into ~/.x-agent/models. Set VOICE_ENABLED=false to disable.${RESET}"
+fi

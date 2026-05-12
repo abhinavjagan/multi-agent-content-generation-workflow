@@ -21,12 +21,13 @@ That script does the whole song-and-dance:
 1. Checks Docker and Ollama are installed and reachable.
 2. Pulls `llama3:latest` (chat + critic) and `nomic-embed-text` (persona retrieval) on the host if missing.
 3. Copies `.env.example` → `.env` if you don't have one.
-4. Builds and starts the FastAPI container.
-5. Polls `/api/health` until it's green, then prints the UI URL.
+4. Starts the host-side **voice sidecar** (`scripts/start_voice.sh`) — calls `scripts/download_models.sh` to stage Kokoro TTS + faster-whisper STT into `~/.x-agent/models` with `curl` (host trust store), then runs uvicorn on `127.0.0.1:8765`.
+5. Builds and starts the FastAPI container; the container proxies `/api/voice/*` to the host sidecar (`VOICE_REMOTE_URL=http://host.docker.internal:8765`).
+6. Polls `/api/health` until it's green, then prints the UI URL.
 
 Open **<http://localhost:8000>** and you're in. Stop with `./scripts/stop.sh` (add `--wipe` to also drop the persona volume).
 
-> **Why is Ollama on the host?** Docker on macOS can't pass Metal to a container, so containerized Ollama is CPU-only and ~10× slower. Keeping it on the host means Apple Silicon stays fast and your `~/.ollama/models` cache is shared with anything else that uses Ollama. Linux works the same way: just `ollama serve` on the host before running `./scripts/start.sh`.
+> **Why is Ollama (and voice) on the host?** Docker on macOS can't pass Metal to a container, so containerized Ollama is CPU-only and ~10× slower. The voice sidecar follows the same pattern: keeping it on the host means model downloads use the OS keychain (works behind Cisco/Zscaler TLS interception), Kokoro+faster-whisper share Apple Silicon kernels, and the FastAPI container itself needs zero outbound network. Linux works the same way: just `ollama serve` on the host before running `./scripts/start.sh`.
 
 ## Requirements
 

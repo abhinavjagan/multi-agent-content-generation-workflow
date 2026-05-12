@@ -255,6 +255,131 @@ QUICK_DIMENSIONS = {
 }
 
 
+# Deep-mode-only questions. These are appended *after* the entire default
+# bank so a deep run goes: every default question + every deep-only one,
+# in this order. Most cover identity / lore / context that's tedious to
+# type but easy to talk through, which is the whole point of voice mode.
+#
+# Keep ``kind="open"`` unless we genuinely want another writing sample;
+# the bank already has six generative probes.
+DEEP_ONLY_QUESTIONS: list[Question] = [
+    Question(
+        dimension="origin_story",
+        prompt=(
+            "Where did you grow up, and what's one detail about that place "
+            "that still shows up in how you write or think? Aim for a "
+            "specific image, not a tourism blurb."
+        ),
+    ),
+    Question(
+        dimension="mentors",
+        prompt=(
+            "Name 2-3 people who shaped how you think -- mentors, bosses, "
+            "writers you've never met, doesn't matter. For each, one "
+            "sentence on what they gave you."
+        ),
+    ),
+    Question(
+        dimension="formative_reading",
+        prompt=(
+            "Which 2-3 books, essays, podcasts, or YouTube channels "
+            "rewired you most? Pick the ones you actually quote, not the "
+            "ones you list on a CV."
+        ),
+    ),
+    Question(
+        dimension="pivotal_moments",
+        prompt=(
+            "Pick one moment in your career or life where you noticeably "
+            "leveled up -- a job switch, a failed project, a conversation "
+            "that landed weird. Walk me through what changed in you."
+        ),
+    ),
+    Question(
+        dimension="anti_personas",
+        prompt=(
+            "Name 2-3 archetypes of poster you actively do NOT want to "
+            "sound like (\"thought-leader LinkedIn dad\", \"hustle-grindset bro\", "
+            "\"cynical reply-guy\"…). For each, one line on what triggers the wince."
+        ),
+    ),
+    Question(
+        dimension="inside_jokes",
+        prompt=(
+            "Are there inside jokes, recurring bits, or running references "
+            "that show up in your writing? Tell me one or two -- and the "
+            "context a stranger would need to get them."
+        ),
+    ),
+    Question(
+        dimension="voice_modulators",
+        prompt=(
+            "How does your voice shift when you're (a) genuinely sleepy, "
+            "(b) stressed about a deadline, (c) buzzing with caffeine? "
+            "Give me a sentence in each register if you can."
+        ),
+    ),
+    Question(
+        dimension="audience_model",
+        prompt=(
+            "When you imagine someone reading your posts, who is it? Be "
+            "specific -- a friend, a younger version of yourself, a class "
+            "of people. What do you assume they already know?"
+        ),
+    ),
+    Question(
+        dimension="taboo_honest_takes",
+        prompt=(
+            "What's something you actually believe but rarely say out loud "
+            "in public because it'd be misread? One or two examples. Skip "
+            "if too spicy -- but if you can share, that's gold for the persona."
+        ),
+    ),
+    Question(
+        dimension="changes_mind",
+        prompt=(
+            "What's the most recent thing you genuinely changed your mind "
+            "about, and what was the moment of pivot? The mechanism matters "
+            "more than the topic."
+        ),
+    ),
+    Question(
+        dimension="writing_rituals",
+        prompt=(
+            "Walk me through how a post actually gets written. Voice memo "
+            "to drafts? Type-and-cringe-edit? Drafts folder for weeks? "
+            "Specific moves you make that aren't 'obvious'."
+        ),
+    ),
+    Question(
+        dimension="signature_failures",
+        prompt=(
+            "What kind of post or comment do you find yourself regretting "
+            "later? Not 'I shouldn't have posted', more like the pattern "
+            "of failure -- punching down, over-explaining, the dunk you "
+            "didn't need to throw."
+        ),
+    ),
+    Question(
+        dimension="domain_rituals",
+        prompt=(
+            "In your main domain, what's a ritual or habit only the "
+            "in-group really gets? (e.g. how you'd write a postmortem, "
+            "how you take notes, how you read a paper.) One concrete one."
+        ),
+    ),
+    Question(
+        dimension="example_voice_memo",
+        prompt=(
+            "Pretend you just left a voice memo to a friend after a long "
+            "day -- 3-5 sentences, loose, the way you'd actually ramble "
+            "about something interesting that happened today."
+        ),
+        kind="generative",
+    ),
+]
+
+
 def all_questions() -> list[Question]:
     return list(QUESTION_BANK)
 
@@ -274,5 +399,16 @@ def quick_questions() -> list[Question]:
     return out
 
 
+def deep_questions() -> list[Question]:
+    """Full bank PLUS the deep-mode-only questions.
+
+    The richer voice channel makes ~30 questions feel ergonomic instead
+    of exhausting, and the extra dimensions feed materially better
+    ``personality.md`` content (origin story, mentors, lore, etc).
+    """
+    return list(QUESTION_BANK) + list(DEEP_ONLY_QUESTIONS)
+
+
 def by_dimension(dimension: str) -> list[Question]:
-    return [q for q in QUESTION_BANK if q.dimension == dimension]
+    full = list(QUESTION_BANK) + list(DEEP_ONLY_QUESTIONS)
+    return [q for q in full if q.dimension == dimension]

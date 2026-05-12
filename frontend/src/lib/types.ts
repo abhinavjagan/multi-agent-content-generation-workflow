@@ -40,11 +40,24 @@ export interface AppConfig {
   research: ResearchConfig;
 }
 
+export interface VoiceStatus {
+  enabled: boolean;
+  stt_model: string;
+  tts_voice: string;
+  tts_lang: string;
+  stt_ready: boolean;
+  tts_ready: boolean;
+  max_audio_bytes: number;
+  max_audio_seconds: number;
+  tts_max_chars: number;
+}
+
 export interface Health {
   version: string;
   ollama: OllamaStatus;
   personas: PersonaStats;
   config: AppConfig;
+  voice: VoiceStatus;
 }
 
 /**
@@ -223,12 +236,22 @@ export interface InterviewState {
   error: string | null;
 }
 
+export type InterviewMode = "quick" | "default" | "deep";
+
 export interface PersonaCreateRequest {
   name: string;
   is_real_person: boolean;
   disclosure_text: string;
   consent_ack: boolean;
+  /** Legacy boolean; prefer `mode`. Both fields together: `mode` wins. */
   quick: boolean;
+  /**
+   * Interview length / depth.
+   *   quick   ~6 questions
+   *   default ~26 questions (the existing full bank)
+   *   deep    ~40 questions + aggressive follow-ups (voice mode default)
+   */
+  mode?: InterviewMode;
 }
 
 export interface TranscriptEntry {
