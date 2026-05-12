@@ -42,6 +42,15 @@ QUESTION_BANK: list[Question] = [
         ),
     ),
     Question(
+        dimension="cadence",
+        prompt=(
+            "When you read your own writing out loud, what does the rhythm "
+            "feel like? Short staccato beats? Long winding sentences? Do you "
+            "lean on em-dashes, ellipses, comma run-ons? Give me two real "
+            "sentences that show your cadence."
+        ),
+    ),
+    Question(
         dimension="humor",
         prompt=(
             "Describe your humor in one or two sentences. When does it show up "
@@ -68,6 +77,14 @@ QUESTION_BANK: list[Question] = [
             "one sentence on why."
         ),
     ),
+    Question(
+        dimension="conviction_signals",
+        prompt=(
+            "When you actually believe something hard, how do you say so? "
+            "Give me the phrases you'd use to plant a flag (e.g. 'I'll die "
+            "on this hill', 'no notes', 'full stop', 'this is the take')."
+        ),
+    ),
     # Boundaries
     Question(
         dimension="boundaries",
@@ -84,10 +101,61 @@ QUESTION_BANK: list[Question] = [
         ),
     ),
     Question(
+        dimension="pet_peeves",
+        prompt=(
+            "Beyond words, what behaviors in posts/replies make you physically "
+            "wince? (e.g. 'reply guys', 'screenshots of LinkedIn', 'corporate "
+            "vagueposting'). List 3-5 with one line on each."
+        ),
+    ),
+    Question(
         dimension="signature_phrases",
         prompt=(
             "Are there phrases or constructions you use a lot that feel like "
             "yours? List a few if so."
+        ),
+    ),
+    Question(
+        dimension="idioms",
+        prompt=(
+            "Give me five short verbatim quirks of yours: a favorite opener, "
+            "a favorite closer, a word you misspell on purpose, a piece of "
+            "slang only your friend group uses, a weird grammar habit. Write "
+            "each one exactly the way you'd type it."
+        ),
+    ),
+    # Stories you reach for
+    Question(
+        dimension="stories",
+        prompt=(
+            "What are 2-3 stories or anecdotes you reach for over and over "
+            "when you're trying to make a point? One or two sentences for "
+            "each is fine."
+        ),
+    ),
+    # Emotional range + enthusiasm
+    Question(
+        dimension="enthusiasm_tells",
+        prompt=(
+            "How does the world know you're genuinely excited about something? "
+            "Caps, punctuation, specific words, screenshots, gifs? Give me the "
+            "actual tells."
+        ),
+    ),
+    Question(
+        dimension="emotional_range",
+        prompt=(
+            "What's the emotional range you let yourself show in public? "
+            "Are there moods you keep private? Where's the line between "
+            "'me on a good day' and 'me when I'm wound up'?"
+        ),
+    ),
+    Question(
+        dimension="apology_pattern",
+        prompt=(
+            "When you mess up publicly, what's the shape of your apology? "
+            "Walk me through the structure: do you lead with what happened, "
+            "with sorry, with a fix? What do you NOT do?"
         ),
     ),
     # Domain + topics
@@ -146,16 +214,44 @@ QUESTION_BANK: list[Question] = [
         ),
         kind="generative",
     ),
+    Question(
+        dimension="example_announce",
+        prompt=(
+            "Write a short post (2-4 sentences) the way you'd announce "
+            "something you're proud of without sounding salesy."
+        ),
+        kind="generative",
+    ),
+    Question(
+        dimension="example_excited",
+        prompt=(
+            "Write a short post (2-4 sentences) the way you'd talk about "
+            "something that genuinely lit you up this week. Show the "
+            "enthusiasm, don't fake it."
+        ),
+        kind="generative",
+    ),
+    Question(
+        dimension="example_morning_pages",
+        prompt=(
+            "Write 2-4 sentences in your voice that aren't trying to be "
+            "anything - just how you'd think out loud about your morning. "
+            "Loose, unfiltered, the way you actually sound."
+        ),
+        kind="generative",
+    ),
 ]
 
 
 QUICK_DIMENSIONS = {
     "style",
+    "cadence",
     "humor",
     "values",
     "banned_phrases",
+    "idioms",
     "example_explainer",
-    "example_disagreement",
+    "example_morning_pages",
 }
 
 

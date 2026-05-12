@@ -7,6 +7,7 @@ import os
 import sys
 import uuid
 from typing import Optional
+from urllib.parse import quote
 
 import typer
 from langgraph.types import Command
@@ -31,7 +32,7 @@ def _check_ollama_model(model: str) -> tuple[bool, str]:
     """
     settings = get_settings()
     try:
-        import httpx  # already a tweepy/langchain transitive dep
+        import httpx  # transitive dep of langchain-ollama
         resp = httpx.get(
             f"{settings.ollama_base_url.rstrip('/')}/api/tags", timeout=3.0
         )
@@ -55,7 +56,7 @@ def _check_ollama_model(model: str) -> tuple[bool, str]:
 
 app = typer.Typer(
     add_completion=False,
-    help="Draft a short blog with a local Ollama LLM and post it to X.",
+    help="Draft a short, persona-shaped post with a local Ollama LLM. No posting, ever.",
 )
 persona_app = typer.Typer(
     add_completion=False,
@@ -139,11 +140,6 @@ def draft(
         "-p",
         help="ID of a saved persona to write as. List with `x-agent persona list`.",
     ),
-    dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        help="Skip the actual X API call; just print what would be posted.",
-    ),
     research: bool = typer.Option(
         False,
         "--research/--no-research",
@@ -168,7 +164,7 @@ def draft(
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """Draft a post about TOPIC, review interactively, and (optionally) publish."""
+    """Draft a post about TOPIC and review it interactively. Never posts."""
     logging.basicConfig(
         level=logging.INFO if verbose else logging.WARNING,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -178,16 +174,6 @@ def draft(
         raise typer.BadParameter("--mode must be 'single' or 'thread'")
 
     settings = get_settings()
-    if not dry_run and not settings.has_x_credentials:
-        console.print(
-            "[yellow]No X API credentials found in environment; "
-            "switching to --dry-run.[/]"
-        )
-        dry_run = True
-    # Propagate dry-run intent to the XClient via env so the node picks it up
-    # without us having to thread an extra arg through the graph state.
-    if dry_run:
-        os.environ["X_AGENT_FORCE_DRY_RUN"] = "1"
 
     if persona:
         store = get_default_store()
@@ -270,22 +256,34 @@ def draft(
         state = graph.invoke(Command(resume=resume), config=config)
 
     if state.get("rejected"):
-        console.print("[red]Rejected. Nothing was posted.[/]")
+        console.print("[red]Rejected. No draft kept.[/]")
         raise typer.Exit(code=1)
 
-    tweet_url = state.get("tweet_url")
-    tweet_ids = state.get("tweet_ids", [])
     error = state.get("error")
     if error:
         console.print(f"[red]Error:[/] {error}")
         raise typer.Exit(code=2)
 
-    if dry_run:
-        console.print(f"[green]Dry-run complete.[/] {len(tweet_ids)} tweet(s) simulated.")
-    else:
-        console.print(f"[green]Posted {len(tweet_ids)} tweet(s).[/]")
-        if tweet_url:
-            console.print(f"  -> {tweet_url}")
+    final_posts = list(state.get("posts") or [])
+    if not final_posts:
+        console.print("[red]No final draft to show.[/]")
+        raise typer.Exit(code=2)
+
+    console.print(f"[green]Draft finalized:[/] {len(final_posts)} tweet(s) ready to copy.")
+    console.print()
+    _print_draft(final_posts, topic, mode)
+    intent_url = (
+        "https://twitter.com/intent/tweet?text="
+        + quote(final_posts[0], safe="")
+    )
+    console.print(
+        "[dim]Open the first tweet in X compose:[/] "
+        f"[cyan]{intent_url}[/]"
+    )
+
+
+# Friendly alias: `x-agent generate ...` does the same thing as `draft`.
+app.command(name="generate", help="Alias for `x-agent draft`.")(draft)
 
 
 @app.command()
@@ -354,6 +352,100 @@ def persona_show(persona_id: str = typer.Argument(...)) -> None:
         console.print(f"[red]Unknown persona id: {persona_id}[/]")
         raise typer.Exit(code=1)
     console.print_json(spec.model_dump_json(indent=2))
+
+
+@persona_app.command("show-md")
+def persona_show_md(persona_id: str = typer.Argument(...)) -> None:
+    """Print the persona's long-form personality.md profile."""
+    store = get_default_store()
+    if not store.exists(persona_id):
+        console.print(f"[red]Unknown persona id: {persona_id}[/]")
+        raise typer.Exit(code=1)
+    try:
+        md = store.read_personality(persona_id)
+    except PersonaNotFoundError:
+        console.print(f"[red]Unknown persona id: {persona_id}[/]")
+        raise typer.Exit(code=1)
+    if not md.strip():
+        console.print(
+            "[yellow]No personality.md captured for this persona yet "
+            "(re-run the interview or use `persona refine`).[/]"
+        )
+        raise typer.Exit(code=1)
+    console.print(md)
+
+
+@persona_app.command("edit-md")
+def persona_edit_md(
+    persona_id: str = typer.Argument(...),
+    editor: Optional[str] = typer.Option(
+        None,
+        "--editor",
+        help="Override $EDITOR / $VISUAL for this invocation.",
+    ),
+) -> None:
+    """Open the persona's personality.md in $EDITOR and save changes on exit.
+
+    The markdown is the source of truth the writer prompt consumes, so a
+    quick hand-tune is the highest-leverage knob you have over the
+    persona's voice.
+    """
+    import subprocess
+    import tempfile
+
+    store = get_default_store()
+    if not store.exists(persona_id):
+        console.print(f"[red]Unknown persona id: {persona_id}[/]")
+        raise typer.Exit(code=1)
+
+    chosen_editor = (
+        editor
+        or os.environ.get("VISUAL")
+        or os.environ.get("EDITOR")
+    )
+    if not chosen_editor:
+        console.print(
+            "[red]No editor configured.[/] Set $EDITOR or pass --editor."
+        )
+        raise typer.Exit(code=1)
+
+    md = store.read_personality(persona_id)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        suffix=".md",
+        prefix=f"{persona_id}-",
+        delete=False,
+        encoding="utf-8",
+    ) as tmp:
+        tmp.write(md if md.endswith("\n") else md + "\n")
+        tmp_path = tmp.name
+
+    try:
+        # Editor arg may legitimately contain flags ('code -w'); split on
+        # whitespace and run without a shell so we don't introduce a shell
+        # injection sink. ``shell=False`` is the default but is spelled out
+        # for clarity given the security context.
+        cmd = chosen_editor.split() + [tmp_path]
+        result = subprocess.run(cmd, shell=False, check=False)  # noqa: S603
+        if result.returncode != 0:
+            console.print(
+                f"[red]Editor exited with code {result.returncode}; "
+                "no changes saved.[/]"
+            )
+            raise typer.Exit(code=result.returncode)
+        with open(tmp_path, "r", encoding="utf-8") as fh:
+            new_md = fh.read()
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    if new_md.strip() == md.strip():
+        console.print("[dim]No changes; persona unchanged.[/]")
+        return
+    store.write_personality(persona_id, new_md)
+    console.print(f"[green]Updated personality.md for {persona_id}.[/]")
 
 
 @persona_app.command("delete")
@@ -580,7 +672,6 @@ def persona_eval(
     else:
         topics = default_prompts
 
-    os.environ["X_AGENT_FORCE_DRY_RUN"] = "1"
     graph = build_graph()
     cfg = {"configurable": {"thread_id": uuid.uuid4().hex}}
 

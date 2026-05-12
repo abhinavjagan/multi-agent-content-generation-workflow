@@ -1,4 +1,7 @@
-"""End-to-end smoke test: real Ollama call, auto-approve, dry-run X post.
+"""End-to-end smoke test: real Ollama call, auto-approve, print final draft.
+
+x-agent never publishes anywhere -- `approve` simply finalizes the draft
+and the graph ends.
 
 Run with: python scripts/smoke.py "<topic>" [single|thread]
 """
@@ -9,11 +12,9 @@ import os
 import sys
 import uuid
 
-os.environ["X_AGENT_FORCE_DRY_RUN"] = "1"
+from langgraph.types import Command
 
-from langgraph.types import Command  # noqa: E402
-
-from x_agent.graph import build_graph  # noqa: E402
+from x_agent.graph import build_graph
 
 
 def main() -> int:
@@ -52,8 +53,9 @@ def main() -> int:
 
     state = graph.invoke(Command(resume={"action": "approve"}), config=cfg)
     print("== final state ==")
-    for k in ("approved", "tweet_ids", "tweet_url", "error"):
+    for k in ("finalized", "rejected", "error"):
         print(f"  {k}: {state.get(k)}")
+    print(f"  posts: {len(state.get('posts') or [])} tweet(s)")
     return 0
 
 

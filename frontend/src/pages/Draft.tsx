@@ -3,10 +3,10 @@ import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   Check,
-  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Copy,
   Edit3,
-  ExternalLink,
   Globe,
   Layers,
   RefreshCw,
@@ -35,6 +35,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { SourceList } from "@/components/SourceList";
+import { FinalDraftCard } from "@/components/FinalDraftCard";
 import {
   ApiError,
   createDraft,
@@ -44,6 +45,7 @@ import {
   previewResearch,
   sendApproval,
 } from "@/lib/api";
+import { recordRecentDraft } from "@/lib/recentDrafts";
 import type {
   ApproveAction,
   ApproveResponse,
@@ -61,7 +63,6 @@ interface FormState {
   style: string;
   model: string;
   personaId: string;
-  dryRun: boolean;
   /** 1 = single draft (existing flow); >1 = generate N variants and pick. */
   variantCount: number;
   /** Run the persona critic against each variant. Slow; off by default. */
@@ -82,6 +83,14 @@ interface ReviewState {
   webResults: WebResult[];
 }
 
+interface FinalizedState {
+  posts: string[];
+  topic: string;
+  personaId: string | null;
+  personaName: string | null;
+  criticScore: number | null;
+}
+
 type ResultState =
   | { kind: "idle" }
   | {
@@ -93,12 +102,15 @@ type ResultState =
     }
   | { kind: "review"; review: ReviewState }
   | { kind: "edit"; review: ReviewState; drafts: string[] }
-  | { kind: "done"; response: ApproveResponse; dryRun: boolean }
+  | { kind: "done"; final: FinalizedState }
   | { kind: "rejected" };
 
 const DEFAULT_STYLE = "punchy, technical, plain prose";
 const VARIANT_OPTIONS = [1, 3, 5] as const;
 const RESEARCH_URL_MAX = 5;
+
+/** localStorage key for the persisted compose form. */
+const FORM_STORAGE_KEY = "x-agent:draft-form:v1";
 
 function parseUrlList(raw: string): string[] {
   return raw
@@ -108,24 +120,42 @@ function parseUrlList(raw: string): string[] {
     .slice(0, RESEARCH_URL_MAX);
 }
 
+function loadStoredForm(): Partial<FormState> | null {
+  try {
+    const raw = window.localStorage.getItem(FORM_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed as Partial<FormState>;
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 export default function Draft() {
   const [params, setParams] = useSearchParams();
   const health = useQuery({ queryKey: ["health"], queryFn: getHealth });
   const personas = useQuery({ queryKey: ["personas"], queryFn: listPersonas });
 
-  const [form, setForm] = useState<FormState>(() => ({
-    topic: "",
-    mode: "thread",
-    style: DEFAULT_STYLE,
-    model: "",
-    personaId: params.get("persona") ?? "",
-    dryRun: false,
-    variantCount: 1,
-    scoreVariants: false,
-    researchEnabled: false,
-    researchUrls: "",
-    researchQuery: "",
-  }));
+  const [form, setForm] = useState<FormState>(() => {
+    const stored = loadStoredForm() ?? {};
+    return {
+      topic: stored.topic ?? "",
+      mode: stored.mode ?? "thread",
+      style: stored.style ?? DEFAULT_STYLE,
+      model: stored.model ?? "",
+      personaId: params.get("persona") ?? stored.personaId ?? "",
+      variantCount: stored.variantCount ?? 1,
+      scoreVariants: stored.scoreVariants ?? false,
+      researchEnabled: stored.researchEnabled ?? false,
+      researchUrls: stored.researchUrls ?? "",
+      researchQuery: stored.researchQuery ?? "",
+    };
+  });
+  const [setupOpen, setSetupOpen] = useState(() => {
+    const stored = loadStoredForm();
+    return !stored?.topic;
+  });
   const [result, setResult] = useState<ResultState>({ kind: "idle" });
   const [previewedSources, setPreviewedSources] = useState<{
     provider: string;
@@ -138,6 +168,15 @@ export default function Draft() {
       setForm((f) => ({ ...f, model: health.data!.ollama.configured_model }));
     }
   }, [health.data, form.model]);
+
+  // Persist the form so a refresh / accidental close keeps your inputs.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(FORM_STORAGE_KEY, JSON.stringify(form));
+    } catch {
+      // privacy-mode browsers; skip
+    }
+  }, [form]);
 
   // Mirror the persona prefill back into the URL bar so refresh-friendly.
   useEffect(() => {
@@ -168,14 +207,14 @@ export default function Draft() {
         style: form.style || DEFAULT_STYLE,
         model: form.model || undefined,
         persona_id: form.personaId || undefined,
-        dry_run: form.dryRun,
         seed_posts: input?.seedPosts,
         ...researchPayload(),
       }),
     onSuccess: (resp: DraftResponse) => {
       if (!resp.awaiting_review) {
         toast.warning(
-          "Backend returned a draft but didn't pause for review. Please check server logs.",
+          "Backend returned a draft but didn't pause for review. Check server logs.",
+          { description: "The graph should always pause at human review." },
         );
       }
       setResult({
@@ -190,7 +229,7 @@ export default function Draft() {
       });
     },
     onError: (err) => {
-      toast.error(err instanceof ApiError ? err.detail : (err as Error).message);
+      showActionableError(err, "Generation failed.");
     },
   });
 
@@ -207,20 +246,25 @@ export default function Draft() {
         ...researchPayload(),
       }),
     onSuccess: (resp: DraftVariantsResponse) => {
-      // Surface any per-variant generation failures up front so the user
-      // doesn't pick an empty card and wonder why it doesn't work.
       const errored = resp.variants.filter((v) => v.error);
       if (errored.length === resp.variants.length) {
         toast.error(
-          `All ${resp.variants.length} variants failed. ${
-            errored[0]?.error ?? "See server logs."
-          }`,
+          `All ${resp.variants.length} variants failed.`,
+          {
+            description:
+              errored[0]?.error ??
+              "See server logs and re-check that Ollama is reachable.",
+          },
         );
         return;
       }
       if (errored.length > 0) {
         toast.warning(
           `${errored.length} of ${resp.variants.length} variant(s) failed; the rest are below.`,
+          {
+            description:
+              "Pick a successful variant or hit Regenerate to retry the failed slots.",
+          },
         );
       }
       setResult({
@@ -232,7 +276,7 @@ export default function Draft() {
       });
     },
     onError: (err) => {
-      toast.error(err instanceof ApiError ? err.detail : (err as Error).message);
+      showActionableError(err, "Variant generation failed.");
     },
   });
 
@@ -248,9 +292,9 @@ export default function Draft() {
     onSuccess: (resp) => {
       setPreviewedSources({ provider: resp.provider, results: resp.results });
       if (resp.results.length === 0) {
-        toast.warning(
-          "No sources found. Try a more specific query or paste URLs.",
-        );
+        toast.warning("No sources found.", {
+          description: "Try a more specific query, or paste URLs directly.",
+        });
       } else {
         toast.success(
           `Found ${resp.results.length} source${
@@ -260,7 +304,7 @@ export default function Draft() {
       }
     },
     onError: (err) => {
-      toast.error(err instanceof ApiError ? err.detail : (err as Error).message);
+      showActionableError(err, "Source preview failed.");
     },
   });
 
@@ -274,7 +318,10 @@ export default function Draft() {
     },
     onSuccess: (resp: ApproveResponse) => {
       if (resp.error) {
-        toast.error(resp.error);
+        toast.error(resp.error, {
+          description:
+            "The server returned an error mid-flow. Check the logs or try Regenerate.",
+        });
       }
       if (resp.rejected) {
         setResult({ kind: "rejected" });
@@ -288,9 +335,6 @@ export default function Draft() {
             posts: resp.posts,
             criticScore: resp.critic_score,
             criticViolations: resp.critic_violations,
-            // The backend re-emits ``web_results`` on every approve turn,
-            // but if it ever stops we keep the previously-shown sources so
-            // the reviewer doesn't lose them mid-flow.
             webResults:
               resp.web_results && resp.web_results.length > 0
                 ? resp.web_results
@@ -301,22 +345,35 @@ export default function Draft() {
         });
         return;
       }
-      // Final state: posted (or dry-run posted).
-      const dryRun =
-        form.dryRun ||
-        !health.data?.x.has_credentials ||
-        !!resp.error;
-      setResult({ kind: "done", response: resp, dryRun });
+      // Final state: graph ended on approve. Persist the draft so it's
+      // discoverable from the Dashboard, then surface the FinalDraftCard.
+      const personaSummary = personas.data?.find((p) => p.id === form.personaId);
+      const final: FinalizedState = {
+        posts: resp.posts,
+        topic: form.topic,
+        personaId: form.personaId || null,
+        personaName: personaSummary?.name ?? null,
+        criticScore: resp.critic_score,
+      };
+      setResult({ kind: "done", final });
+      recordRecentDraft({
+        topic: final.topic,
+        mode: form.mode,
+        posts: final.posts,
+        persona_id: final.personaId,
+        persona_name: final.personaName,
+        critic_score: final.criticScore,
+      });
       if (!resp.error) {
         toast.success(
-          dryRun
-            ? `Dry-run complete: ${resp.tweet_ids.length} tweet(s) simulated`
-            : `Posted ${resp.tweet_ids.length} tweet(s)`,
+          `Draft finalized: ${resp.posts.length} tweet${
+            resp.posts.length === 1 ? "" : "s"
+          } ready to copy.`,
         );
       }
     },
     onError: (err) => {
-      toast.error(err instanceof ApiError ? err.detail : (err as Error).message);
+      showActionableError(err, "Couldn't finalize this draft.");
     },
   });
 
@@ -338,6 +395,7 @@ export default function Draft() {
     () => parseUrlList(form.researchUrls),
     [form.researchUrls],
   );
+  const maxChars = health.data?.config?.max_tweet_chars ?? 275;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr),360px]">
@@ -349,7 +407,7 @@ export default function Draft() {
             mode={result.mode}
             webResults={result.webResults}
             picking={draftMutation.isPending}
-            maxChars={health.data?.x.max_tweet_chars ?? 275}
+            maxChars={maxChars}
             onPick={(variant) => {
               if (!variant.posts.length) {
                 toast.error("That variant has no posts to seed from.");
@@ -369,7 +427,7 @@ export default function Draft() {
             editing={result.kind === "edit"}
             drafts={result.kind === "edit" ? result.drafts : result.review.posts}
             busy={approveMutation.isPending}
-            maxChars={health.data?.x.max_tweet_chars ?? 275}
+            maxChars={maxChars}
             onStartEdit={() =>
               setResult({
                 kind: "edit",
@@ -396,7 +454,9 @@ export default function Draft() {
                 .filter(Boolean)
                 .join("\n\n");
               if (!edited) {
-                toast.error("Edit cannot be empty");
+                toast.error("Edit cannot be empty", {
+                  description: "Type something into at least one tweet.",
+                });
                 return;
               }
               approveMutation.mutate({ action: "edit", edited });
@@ -405,7 +465,12 @@ export default function Draft() {
         ) : null}
 
         {result.kind === "done" ? (
-          <PostedCard response={result.response} dryRun={result.dryRun} />
+          <FinalDraftCard
+            posts={result.final.posts}
+            topic={result.final.topic}
+            personaName={result.final.personaName}
+            onReset={() => setResult({ kind: "idle" })}
+          />
         ) : null}
 
         {result.kind === "rejected" ? (
@@ -414,7 +479,7 @@ export default function Draft() {
             <div className="space-y-1">
               <AlertTitle>Rejected.</AlertTitle>
               <AlertDescription>
-                Nothing was posted. Use the form to start over.
+                No draft was kept. Tweak the topic above and try again.
               </AlertDescription>
             </div>
           </Alert>
@@ -427,13 +492,15 @@ export default function Draft() {
               Compose a draft
             </CardTitle>
             <CardDescription>
-              The agent will generate, run a critic, then pause here for your
-              review.
+              Generate, run a critic, review, finalize. We never post — you
+              copy the final draft yourself.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
             <div className="space-y-2">
-              <Label htmlFor="topic">Topic</Label>
+              <Label htmlFor="topic" className="text-base">
+                Topic
+              </Label>
               <Textarea
                 id="topic"
                 placeholder="e.g. Why local LLMs matter in 2026"
@@ -443,253 +510,249 @@ export default function Draft() {
                 rows={3}
                 autoSize
                 disabled={isBusy}
+                className="text-base"
               />
               <p className="text-right text-xs text-muted-foreground">
                 {form.topic.length}/280
               </p>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Mode</Label>
-                <Select
-                  value={form.mode}
-                  onChange={(e) =>
-                    setForm({ ...form, mode: e.target.value as PostMode })
-                  }
-                  disabled={isBusy}
-                >
-                  <option value="thread">thread</option>
-                  <option value="single">single</option>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Persona</Label>
-                <Select
-                  value={form.personaId}
-                  onChange={(e) =>
-                    setForm({ ...form, personaId: e.target.value })
-                  }
-                  disabled={isBusy}
-                >
-                  <option value="">(none)</option>
-                  {personas.data?.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} — {p.id}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-            </div>
+            <button
+              type="button"
+              onClick={() => setSetupOpen((v) => !v)}
+              className="flex w-full items-center justify-between rounded-lg border border-border/60 bg-background/30 px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-background/50"
+            >
+              <span>Setup · mode, persona, variants, model, research</span>
+              {setupOpen ? (
+                <ChevronUp className="h-4 w-4" />
+              ) : (
+                <ChevronDown className="h-4 w-4" />
+              )}
+            </button>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Variants</Label>
-                <Select
-                  value={String(form.variantCount)}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      variantCount: parseInt(e.target.value, 10),
-                    })
-                  }
-                  disabled={isBusy}
-                >
-                  {VARIANT_OPTIONS.map((n) => (
-                    <option key={n} value={n}>
-                      {n === 1 ? "1 (single draft)" : `${n} variants to pick from`}
-                    </option>
-                  ))}
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  {form.variantCount > 1
-                    ? `Generates ${form.variantCount} drafts in parallel at different temperatures, then you pick one.`
-                    : "Goes straight to the review screen."}
-                </p>
-              </div>
-              <div className="flex items-end justify-between gap-3 rounded-md border border-border p-3">
-                <div className="space-y-1">
-                  <Label htmlFor="score-variants" className="cursor-pointer">
-                    Score each variant
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    {form.variantCount === 1
-                      ? "N/A for a single draft."
-                      : form.personaId
-                        ? "Runs the persona critic per variant. Doubles latency."
-                        : "Needs a persona; ignored otherwise."}
-                  </p>
-                </div>
-                <Switch
-                  id="score-variants"
-                  checked={form.scoreVariants}
-                  onCheckedChange={(v) =>
-                    setForm({ ...form, scoreVariants: v })
-                  }
-                  disabled={
-                    isBusy || form.variantCount === 1 || !form.personaId
-                  }
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="style">Style hint</Label>
-              <Input
-                id="style"
-                value={form.style}
-                placeholder={DEFAULT_STYLE}
-                onChange={(e) => setForm({ ...form, style: e.target.value })}
-                maxLength={200}
-                disabled={isBusy}
-              />
-            </div>
-
-            <div className="rounded-md border border-border p-4 space-y-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="space-y-1">
-                  <Label
-                    htmlFor="research-toggle"
-                    className="cursor-pointer flex items-center gap-2"
-                  >
-                    <Globe className="h-4 w-4 text-primary" />
-                    Ground in web sources
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    {form.researchEnabled
-                      ? `On — your ${
-                          researchUrlList.length > 0 ? "URLs" : "topic / query"
-                        } will be sent to ${researchProvider}.`
-                      : "Off — the agent only sees your persona and examples."}
-                  </p>
-                </div>
-                <Switch
-                  id="research-toggle"
-                  checked={form.researchEnabled}
-                  onCheckedChange={(v) => {
-                    setForm({ ...form, researchEnabled: v });
-                    if (!v) setPreviewedSources(null);
-                  }}
-                  disabled={isBusy}
-                />
-              </div>
-
-              {form.researchEnabled ? (
-                <div className="space-y-3">
+            {setupOpen ? (
+              <div className="space-y-5 rounded-xl border border-border/40 bg-background/20 p-4">
+                <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label htmlFor="research-urls">
-                      URLs to summarize (one per line, max {RESEARCH_URL_MAX})
-                    </Label>
-                    <Textarea
-                      id="research-urls"
-                      placeholder={"https://example.com/post\nhttps://blog.example/article"}
-                      value={form.researchUrls}
+                    <Label>Mode</Label>
+                    <Select
+                      value={form.mode}
                       onChange={(e) =>
-                        setForm({ ...form, researchUrls: e.target.value })
+                        setForm({ ...form, mode: e.target.value as PostMode })
                       }
-                      rows={3}
-                      autoSize
+                      disabled={isBusy}
+                    >
+                      <option value="thread">thread</option>
+                      <option value="single">single</option>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Persona</Label>
+                    <Select
+                      value={form.personaId}
+                      onChange={(e) =>
+                        setForm({ ...form, personaId: e.target.value })
+                      }
+                      disabled={isBusy}
+                    >
+                      <option value="">(none)</option>
+                      {personas.data?.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} — {p.id}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>Variants</Label>
+                    <Select
+                      value={String(form.variantCount)}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          variantCount: parseInt(e.target.value, 10),
+                        })
+                      }
+                      disabled={isBusy}
+                    >
+                      {VARIANT_OPTIONS.map((n) => (
+                        <option key={n} value={n}>
+                          {n === 1 ? "1 (single draft)" : `${n} variants to pick from`}
+                        </option>
+                      ))}
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      {form.variantCount > 1
+                        ? `Generates ${form.variantCount} drafts in parallel at different temperatures, then you pick one.`
+                        : "Goes straight to the review screen."}
+                    </p>
+                  </div>
+                  <div className="flex items-end justify-between gap-3 rounded-md border border-border/60 bg-background/30 p-3">
+                    <div className="space-y-1">
+                      <Label htmlFor="score-variants" className="cursor-pointer">
+                        Score each variant
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        {form.variantCount === 1
+                          ? "N/A for a single draft."
+                          : form.personaId
+                            ? "Runs the persona critic per variant. Doubles latency."
+                            : "Needs a persona; ignored otherwise."}
+                      </p>
+                    </div>
+                    <Switch
+                      id="score-variants"
+                      checked={form.scoreVariants}
+                      onCheckedChange={(v) =>
+                        setForm({ ...form, scoreVariants: v })
+                      }
+                      disabled={
+                        isBusy || form.variantCount === 1 || !form.personaId
+                      }
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="style">Style hint</Label>
+                  <Input
+                    id="style"
+                    value={form.style}
+                    placeholder={DEFAULT_STYLE}
+                    onChange={(e) => setForm({ ...form, style: e.target.value })}
+                    maxLength={200}
+                    disabled={isBusy}
+                  />
+                </div>
+
+                <div className="space-y-4 rounded-md border border-border/60 bg-background/30 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <Label
+                        htmlFor="research-toggle"
+                        className="cursor-pointer flex items-center gap-2"
+                      >
+                        <Globe className="h-4 w-4 text-primary" />
+                        Ground in web sources
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        {form.researchEnabled
+                          ? `On — your ${
+                              researchUrlList.length > 0 ? "URLs" : "topic / query"
+                            } will be sent to ${researchProvider}.`
+                          : "Off — the agent only sees your persona and examples."}
+                      </p>
+                    </div>
+                    <Switch
+                      id="research-toggle"
+                      checked={form.researchEnabled}
+                      onCheckedChange={(v) => {
+                        setForm({ ...form, researchEnabled: v });
+                        if (!v) setPreviewedSources(null);
+                      }}
                       disabled={isBusy}
                     />
-                    <p className="text-xs text-muted-foreground">
-                      {researchUrlList.length === 0
-                        ? "Empty → topic-driven web search."
-                        : `${researchUrlList.length} URL${
-                            researchUrlList.length === 1 ? "" : "s"
-                          } will be fetched (search skipped).`}
-                    </p>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="research-query">
-                      Search query override
-                    </Label>
-                    <Input
-                      id="research-query"
-                      value={form.researchQuery}
-                      placeholder="defaults to topic"
-                      onChange={(e) =>
-                        setForm({ ...form, researchQuery: e.target.value })
-                      }
-                      maxLength={500}
-                      disabled={
-                        isBusy || researchUrlList.length > 0
-                      }
-                    />
-                  </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-[11px] text-muted-foreground">
-                      Provider: <span className="font-mono">{researchProvider}</span>
-                    </p>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => previewMutation.mutate()}
-                      loading={previewMutation.isPending}
-                      disabled={
-                        isBusy ||
-                        previewMutation.isPending ||
-                        (!form.topic.trim() &&
-                          !form.researchQuery.trim() &&
-                          researchUrlList.length === 0)
-                      }
-                    >
-                      <Search className="h-4 w-4" />
-                      Preview sources
-                    </Button>
-                  </div>
-                  {previewedSources ? (
-                    <SourceList
-                      results={previewedSources.results}
-                      provider={previewedSources.provider}
-                      label={`Preview · ${previewedSources.results.length} source${
-                        previewedSources.results.length === 1 ? "" : "s"
-                      }`}
-                    />
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Model override</Label>
-                <Select
-                  value={form.model}
-                  onChange={(e) => setForm({ ...form, model: e.target.value })}
-                  disabled={isBusy}
-                >
-                  {(health.data?.ollama.available_models ?? []).map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                  {health.data?.ollama.available_models?.length === 0 ? (
-                    <option value="">(no models pulled)</option>
+                  {form.researchEnabled ? (
+                    <div className="space-y-3">
+                      <div className="space-y-2">
+                        <Label htmlFor="research-urls">
+                          URLs to summarize (one per line, max {RESEARCH_URL_MAX})
+                        </Label>
+                        <Textarea
+                          id="research-urls"
+                          placeholder={"https://example.com/post\nhttps://blog.example/article"}
+                          value={form.researchUrls}
+                          onChange={(e) =>
+                            setForm({ ...form, researchUrls: e.target.value })
+                          }
+                          rows={3}
+                          autoSize
+                          disabled={isBusy}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          {researchUrlList.length === 0
+                            ? "Empty → topic-driven web search."
+                            : `${researchUrlList.length} URL${
+                                researchUrlList.length === 1 ? "" : "s"
+                              } will be fetched (search skipped).`}
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="research-query">
+                          Search query override
+                        </Label>
+                        <Input
+                          id="research-query"
+                          value={form.researchQuery}
+                          placeholder="defaults to topic"
+                          onChange={(e) =>
+                            setForm({ ...form, researchQuery: e.target.value })
+                          }
+                          maxLength={500}
+                          disabled={
+                            isBusy || researchUrlList.length > 0
+                          }
+                        />
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[11px] text-muted-foreground">
+                          Provider: <span className="font-mono">{researchProvider}</span>
+                        </p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => previewMutation.mutate()}
+                          loading={previewMutation.isPending}
+                          disabled={
+                            isBusy ||
+                            previewMutation.isPending ||
+                            (!form.topic.trim() &&
+                              !form.researchQuery.trim() &&
+                              researchUrlList.length === 0)
+                          }
+                        >
+                          <Search className="h-4 w-4" />
+                          Preview sources
+                        </Button>
+                      </div>
+                      {previewedSources ? (
+                        <SourceList
+                          results={previewedSources.results}
+                          provider={previewedSources.provider}
+                          label={`Preview · ${previewedSources.results.length} source${
+                            previewedSources.results.length === 1 ? "" : "s"
+                          }`}
+                        />
+                      ) : null}
+                    </div>
                   ) : null}
-                </Select>
-              </div>
-              <div className="flex items-end justify-between gap-3 rounded-md border border-border p-3">
-                <div className="space-y-1">
-                  <Label htmlFor="dry-run" className="cursor-pointer">
-                    Dry-run
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    {health.data?.x.has_credentials
-                      ? "When on, never calls X."
-                      : "Forced on (no X creds)."}
-                  </p>
                 </div>
-                <Switch
-                  id="dry-run"
-                  checked={form.dryRun || !health.data?.x.has_credentials}
-                  onCheckedChange={(v) =>
-                    setForm({ ...form, dryRun: v })
-                  }
-                  disabled={!health.data?.x.has_credentials || isBusy}
-                />
+
+                <div className="space-y-2">
+                  <Label>Model override</Label>
+                  <Select
+                    value={form.model}
+                    onChange={(e) => setForm({ ...form, model: e.target.value })}
+                    disabled={isBusy}
+                  >
+                    {(health.data?.ollama.available_models ?? []).map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                    {health.data?.ollama.available_models?.length === 0 ? (
+                      <option value="">(no models pulled)</option>
+                    ) : null}
+                  </Select>
+                </div>
               </div>
-            </div>
+            ) : null}
           </CardContent>
           <CardFooter className="justify-end">
             <Button
@@ -734,28 +797,52 @@ export default function Draft() {
             </p>
             <ul className="list-disc space-y-1 pl-5">
               <li>
-                <span className="text-foreground">Approve</span> publishes (or
-                simulates in dry-run).
+                <span className="text-foreground">Approve</span> finalizes the
+                draft and shows it ready to copy.
               </li>
               <li>
                 <span className="text-foreground">Edit</span> lets you tweak
-                each tweet inline before posting.
+                each tweet inline before finalizing.
               </li>
               <li>
                 <span className="text-foreground">Regenerate</span> asks the
                 model again, possibly looping the critic.
               </li>
               <li>
-                <span className="text-foreground">Reject</span> ends the run
-                without posting.
+                <span className="text-foreground">Reject</span> ends the run.
               </li>
             </ul>
+            <p className="text-xs text-muted-foreground">
+              We never publish for you. The final card hands off to X compose
+              via a deep link, with the first tweet pre-filled.
+            </p>
           </CardContent>
         </Card>
         {form.personaId ? <PersonaHint personaId={form.personaId} /> : null}
       </aside>
     </div>
   );
+}
+
+function showActionableError(err: unknown, fallback: string): void {
+  const message = err instanceof ApiError ? err.detail : (err as Error).message;
+  const status = err instanceof ApiError ? err.status : 0;
+  const description = (() => {
+    if (status === 0) {
+      return "Is the FastAPI server still running? Check `docker compose logs`.";
+    }
+    if (status === 422 || status === 400) {
+      return "Check the form values above — at least one field looks off.";
+    }
+    if (status === 502 || status === 503 || status === 504) {
+      return "Ollama looks unreachable. Run `ollama serve` and `ollama list`.";
+    }
+    if (status >= 500) {
+      return "The server logged a stack trace; tail it with `docker compose logs -f x-agent`.";
+    }
+    return "Try again, or open the browser console for more detail.";
+  })();
+  toast.error(message || fallback, { description });
 }
 
 function PersonaHint({ personaId }: { personaId: string }) {
@@ -841,9 +928,7 @@ function ReviewCard({
             </CardDescription>
           </div>
           {score != null ? (
-            <Badge variant={scoreVariant}>
-              critic {score}/5
-            </Badge>
+            <Badge variant={scoreVariant}>critic {score}/5</Badge>
           ) : null}
         </div>
         {review.criticViolations.length ? (
@@ -873,16 +958,12 @@ function ReviewCard({
       <CardFooter className="flex-wrap gap-2">
         {editing ? (
           <>
-            <Button
-              variant="outline"
-              onClick={onCancelEdit}
-              disabled={busy}
-            >
+            <Button variant="outline" onClick={onCancelEdit} disabled={busy}>
               Cancel
             </Button>
             <Button onClick={onSubmitEdit} loading={busy}>
               <Check className="h-4 w-4" />
-              Save edit + approve
+              Save edit + finalize
             </Button>
           </>
         ) : (
@@ -905,17 +986,13 @@ function ReviewCard({
               <RefreshCw className="h-4 w-4" />
               Regenerate
             </Button>
-            <Button
-              variant="secondary"
-              onClick={onStartEdit}
-              disabled={busy}
-            >
+            <Button variant="secondary" onClick={onStartEdit} disabled={busy}>
               <Edit3 className="h-4 w-4" />
               Edit
             </Button>
             <Button onClick={onApprove} loading={busy} disabled={busy}>
               <Send className="h-4 w-4" />
-              Approve & post
+              Approve & finalize
             </Button>
           </>
         )}
@@ -950,15 +1027,15 @@ function TweetCard({
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
     } catch {
-      toast.error("Could not copy to clipboard");
+      toast.error("Clipboard not available.");
     }
   };
 
   return (
     <div
       className={cn(
-        "rounded-lg border bg-background/40 p-4",
-        editable ? "border-primary/40" : "border-border",
+        "surface-glass rounded-xl p-4",
+        editable ? "ring-1 ring-primary/40" : "",
         overLimit && "ring-1 ring-destructive/40",
       )}
     >
@@ -979,7 +1056,7 @@ function TweetCard({
             <button
               type="button"
               onClick={handleCopy}
-              className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent/60 hover:text-foreground"
               aria-label="Copy tweet"
               title="Copy"
             >
@@ -997,7 +1074,7 @@ function TweetCard({
           autoSize
           value={text}
           onChange={(e) => onChange(e.target.value)}
-          className="bg-background"
+          className="bg-background/60"
         />
       ) : (
         <p className="whitespace-pre-wrap font-mono text-sm leading-relaxed">
@@ -1005,63 +1082,6 @@ function TweetCard({
         </p>
       )}
     </div>
-  );
-}
-
-function PostedCard({
-  response,
-  dryRun,
-}: {
-  response: ApproveResponse;
-  dryRun: boolean;
-}) {
-  const tweets = useMemo(() => response.posts, [response.posts]);
-  return (
-    <Card className="border-success/40 bg-success/5">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <CheckCircle2 className="h-5 w-5 text-success" />
-          {dryRun ? "Dry-run complete" : "Posted to X"}
-        </CardTitle>
-        <CardDescription>
-          {response.tweet_ids.length} tweet
-          {response.tweet_ids.length === 1 ? "" : "s"}
-          {response.error ? ` · error: ${response.error}` : ""}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {tweets.map((post, idx) => (
-          <div
-            key={idx}
-            className="rounded-md border border-border bg-background/60 p-3 text-sm"
-          >
-            <p className="mb-1 text-xs text-muted-foreground">
-              Tweet {idx + 1}/{tweets.length}
-              {response.tweet_ids[idx]
-                ? ` · id ${response.tweet_ids[idx]}`
-                : ""}
-            </p>
-            <p className="whitespace-pre-wrap font-mono leading-relaxed">
-              {post}
-            </p>
-          </div>
-        ))}
-      </CardContent>
-      {response.tweet_url ? (
-        <CardFooter>
-          <Button asChild variant="outline">
-            <a
-              href={response.tweet_url}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <ExternalLink className="h-4 w-4" />
-              View on X
-            </a>
-          </Button>
-        </CardFooter>
-      ) : null}
-    </Card>
   );
 }
 
@@ -1190,13 +1210,13 @@ function VariantCard({ variant, maxChars, picking, onPick }: VariantCardProps) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
     } catch {
-      toast.error("Could not copy to clipboard");
+      toast.error("Clipboard not available.");
     }
   };
 
   if (variant.error) {
     return (
-      <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm">
+      <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm">
         <div className="mb-2 flex items-center justify-between">
           <span className="font-medium">Variant {variant.index + 1}</span>
           <Badge variant="destructive">failed</Badge>
@@ -1207,7 +1227,7 @@ function VariantCard({ variant, maxChars, picking, onPick }: VariantCardProps) {
   }
 
   return (
-    <div className="flex flex-col rounded-lg border border-border bg-background/40 p-4">
+    <div className="surface-glass flex flex-col rounded-xl p-4">
       <div className="mb-3 flex items-center justify-between text-xs">
         <div className="flex items-center gap-2">
           <span className="font-medium">Variant {variant.index + 1}</span>
@@ -1222,7 +1242,7 @@ function VariantCard({ variant, maxChars, picking, onPick }: VariantCardProps) {
         <button
           type="button"
           onClick={handleCopy}
-          className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent/60 hover:text-foreground"
           aria-label="Copy variant"
           title="Copy"
           disabled={picking}

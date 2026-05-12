@@ -57,7 +57,15 @@ class Voice(BaseModel):
 
 
 class PersonaSpec(BaseModel):
-    """Structured persona, derived from an interview transcript."""
+    """Structured persona, derived from an interview transcript.
+
+    The JSON spec lives next to a long-form ``personality.md`` profile on
+    disk; the writer prompt and critic consume the markdown directly so
+    they see a narrative description of the human rather than a chip
+    cloud. The structured fields below are kept as machine-readable
+    metadata (UI rendering, filtering, summaries) and are derived from
+    the same extraction step that produces ``personality_md``.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -88,6 +96,76 @@ class PersonaSpec(BaseModel):
     decision_style: str = Field(default="", max_length=400)
     confidence_phrasing: str = Field(default="", max_length=400)
 
+    # --- Richer personality dimensions (added v0.2.0) ---
+    cadence: str = Field(
+        default="",
+        max_length=600,
+        description=(
+            "How sentences flow: rhythm, pauses, run-ons, comma habits, "
+            "the way they 'sound' read aloud."
+        ),
+    )
+    idioms: list[str] = Field(
+        default_factory=list,
+        max_length=30,
+        description=(
+            "Favorite words, quirks, weird grammar, openers and closers "
+            "they actually use verbatim."
+        ),
+    )
+    story_seeds: list[str] = Field(
+        default_factory=list,
+        max_length=12,
+        description=(
+            "Short prompts of anecdotes / examples this person reaches "
+            "for over and over. Each item is one or two sentences."
+        ),
+    )
+    pet_peeves: list[str] = Field(default_factory=list, max_length=20)
+    enthusiasm_tells: list[str] = Field(
+        default_factory=list,
+        max_length=15,
+        description=(
+            "The phrases or punctuation moves that show up when they're "
+            "actually excited."
+        ),
+    )
+    conviction_signals: list[str] = Field(
+        default_factory=list,
+        max_length=15,
+        description=(
+            "How they signal certainty / strong belief (e.g. 'I will die "
+            "on this hill', 'no notes', 'full stop')."
+        ),
+    )
+    apology_pattern: str = Field(
+        default="",
+        max_length=600,
+        description="The shape of an apology in their voice.",
+    )
+    emotional_range: str = Field(
+        default="",
+        max_length=600,
+        description=(
+            "How wide their emotional palette is in public, and what "
+            "ranges they keep private."
+        ),
+    )
+
+    # Long-form narrative profile (Markdown). This is what the writer
+    # prompt reads. Stored alongside the JSON spec on disk so a user can
+    # hand-edit it.
+    personality_md: str = Field(
+        default="",
+        description=(
+            "Markdown personality profile rendered from the spec + "
+            "transcript. The writer prompt and critic consume this as "
+            "the source of truth. Bounded loosely to keep prompts "
+            "tractable but allowed to be long enough to capture nuance."
+        ),
+        max_length=40_000,
+    )
+
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -103,6 +181,8 @@ class PersonaSpec(BaseModel):
     @field_validator(
         "values", "opinions", "domains", "signature_phrases",
         "banned_phrases", "topics_loved", "topics_avoided",
+        "idioms", "story_seeds", "pet_peeves", "enthusiasm_tells",
+        "conviction_signals",
     )
     @classmethod
     def _strip_and_dedupe(cls, v: list[str]) -> list[str]:
@@ -110,7 +190,7 @@ class PersonaSpec(BaseModel):
         out: list[str] = []
         for item in v:
             s = (item or "").strip()
-            if not s or len(s) > 240:
+            if not s or len(s) > 480:
                 continue
             key = s.lower()
             if key in seen:

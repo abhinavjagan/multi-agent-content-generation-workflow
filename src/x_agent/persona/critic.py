@@ -14,6 +14,7 @@ from langchain_ollama import ChatOllama
 
 from ..config import get_settings
 from .json_utils import JsonParseError, extract_json
+from .markdown import summarize_for_prompt
 from .schema import PersonaSpec
 
 log = logging.getLogger(__name__)
@@ -34,6 +35,23 @@ _CRITIC_SYSTEM = (
 
 
 def _summarize_persona(p: PersonaSpec) -> str:
+    """Compose the PERSONA block shown to the critic.
+
+    Prefers the long-form ``personality_md`` profile when present (the
+    same source of truth the writer prompt reads). Falls back to a terse
+    structured summary for older personas that predate v0.2.0. We always
+    append the banned-phrase list so the critic has the guardrails in
+    front of it even when the markdown was truncated for budget.
+    """
+    md = summarize_for_prompt(p.personality_md or "", max_chars=4_000)
+    if md:
+        tail: list[str] = []
+        if p.banned_phrases:
+            tail.append("BANNED phrases: " + ", ".join(p.banned_phrases[:12]))
+        if p.topics_avoided:
+            tail.append("AVOIDS: " + ", ".join(p.topics_avoided[:6]))
+        return md + ("\n\n" + "\n".join(tail) if tail else "")
+
     parts = [
         f"Name: {p.name}",
         (

@@ -2,13 +2,14 @@
 # (not in a sibling container), which keeps Metal GPU acceleration available
 # on Apple Silicon and avoids shipping a multi-GB model image.
 #
-# Prereqs on the host (one-time):
-#   brew install ollama          # or install via your distro's package manager
+# Easy path:  ./scripts/start.sh   (detects Ollama, pulls models, builds, polls health)
+# Stop:       ./scripts/stop.sh    (add --wipe to drop the persona volume too)
+#
+# Manual path (if you'd rather):
+#   brew install ollama          # or your distro's package manager
 #   ollama serve &               # or use the Ollama desktop app
 #   ollama pull llama3:latest
 #   ollama pull nomic-embed-text
-#
-# Start with:
 #   docker compose up --build
 
 services:
@@ -23,7 +24,6 @@ services:
       OLLAMA_MODEL: llama3:latest
       EMBEDDING_MODEL: nomic-embed-text
       PERSONA_DIR: /data/personas
-      PYTEST_ADDOPTS: "-p no:cacheprovider"
     env_file:
       - path: .env
         required: false

@@ -11,6 +11,7 @@ from langchain_ollama import ChatOllama
 
 from ..config import get_settings
 from .json_utils import JsonParseError, extract_json
+from .markdown import render_personality_md
 from .questions import Question
 from .schema import (
     PersonaSpec,
@@ -45,21 +46,43 @@ _EXTRACT_SYSTEM = (
     '  "values": [str], "opinions": [str], "domains": [str],\n'
     '  "signature_phrases": [str], "banned_phrases": [str],\n'
     '  "topics_loved": [str], "topics_avoided": [str],\n'
-    '  "decision_style": str, "confidence_phrasing": str\n'
+    '  "decision_style": str, "confidence_phrasing": str,\n'
+    '  "cadence": str,\n'
+    '  "idioms": [str], "story_seeds": [str], "pet_peeves": [str],\n'
+    '  "enthusiasm_tells": [str], "conviction_signals": [str],\n'
+    '  "apology_pattern": str, "emotional_range": str\n'
     "}\n"
     "\n"
     "Calibration:\n"
     "- formality: 1 if they write lowercase / use slang like 'rn, tbh, ngl, "
     "lol, lessgoo'. 2 casual but professional. 3 neutral. 4 formal. 5 academic.\n"
-    "- signature_phrases: ACTUAL recurring tokens / openers / catchphrases the "
-    "subject literally used (e.g. 'lessgoo', 'lowkey', 'tbh', 'lol', 'rn', "
-    "'imo', 'ngl', 'nahh'). Pull the slang verbatim. Do NOT summarize, do NOT "
-    "echo follow-up boilerplate.\n"
+    "- signature_phrases & idioms: ACTUAL recurring tokens / openers / "
+    "catchphrases the subject literally used (e.g. 'lessgoo', 'lowkey', "
+    "'tbh', 'lol', 'rn', 'imo', 'ngl', 'nahh'). Pull the slang verbatim. "
+    "Do NOT summarize, do NOT echo follow-up boilerplate. 'idioms' is the "
+    "broader bag: weird grammar, intentional misspellings, in-group slang, "
+    "openers/closers; 'signature_phrases' is the short list they'd be "
+    "recognized for.\n"
+    "- cadence: ONE-SENTENCE description of their rhythm (e.g. 'short "
+    "staccato beats with frequent dashes', 'long winding sentences held "
+    "together by commas').\n"
+    "- story_seeds: short prompts (one-two sentences each) of anecdotes "
+    "they reach for. Quote the gist, not the full text.\n"
+    "- enthusiasm_tells: the actual moves (caps, exclamation runs, words "
+    "like 'omg', 'lessgoo') that show they care.\n"
+    "- conviction_signals: phrases that plant a flag ('full stop', 'no "
+    "notes', 'I will die on this hill').\n"
+    "- pet_peeves: behaviors they wince at (vague-posting, reply guys, "
+    "screenshots-as-content). Short, concrete items.\n"
+    "- apology_pattern: ONE-SENTENCE description of how their apology "
+    "is structured.\n"
+    "- emotional_range: ONE-SENTENCE description of the range they show "
+    "in public vs. keep private.\n"
     "- banned_phrases: items the subject said they hate or refuse to use.\n"
     "- values / opinions: short noun phrases, not paragraphs.\n"
     "\n"
-    "Only include phrases grounded in the transcript. Lists at most 8 items. "
-    "Strings under 240 chars. If a field has no signal, return [] or \"\" but "
+    "Only include phrases grounded in the transcript. Lists at most 12 items. "
+    "Strings under 480 chars. If a field has no signal, return [] or \"\" but "
     "keep the key."
 )
 
@@ -215,5 +238,18 @@ def extract_persona_spec(
         topics_avoided=list(data.get("topics_avoided") or []),
         decision_style=str(data.get("decision_style") or ""),
         confidence_phrasing=str(data.get("confidence_phrasing") or ""),
+        cadence=str(data.get("cadence") or ""),
+        idioms=list(data.get("idioms") or []),
+        story_seeds=list(data.get("story_seeds") or []),
+        pet_peeves=list(data.get("pet_peeves") or []),
+        enthusiasm_tells=list(data.get("enthusiasm_tells") or []),
+        conviction_signals=list(data.get("conviction_signals") or []),
+        apology_pattern=str(data.get("apology_pattern") or ""),
+        emotional_range=str(data.get("emotional_range") or ""),
     )
+    # Render the long-form personality.md narrative deterministically from
+    # the spec + transcript. This is the artifact the writer prompt and
+    # critic actually consume; the JSON spec stays around as metadata for
+    # the UI and as an editable summary.
+    spec.personality_md = render_personality_md(spec, transcript)
     return spec

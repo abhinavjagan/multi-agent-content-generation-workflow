@@ -1,10 +1,14 @@
-"""LangGraph nodes for the x-agent draft -> review -> post flow.
+"""LangGraph nodes for the x-agent draft -> review flow.
 
 When a ``persona_id`` is set in state, the graph routes through:
 ``load_persona -> retrieve_examples -> generate_draft -> format_for_x ->
-persona_critic -> human_review -> post_to_x``.
+persona_critic -> human_review``.
 Without a persona, ``load_persona`` and ``retrieve_examples`` are no-ops
 and ``persona_critic`` short-circuits, preserving the original flow.
+
+x-agent never publishes anywhere. ``human_review`` ends the graph after
+an ``approve`` action and the caller hands the finalized posts to the
+user to copy / open in X compose themselves.
 """
 
 from __future__ import annotations
@@ -20,11 +24,11 @@ from .config import get_settings
 from .formatter import sanitize_topic, split_into_thread, trim_to_single
 from .persona.critic import score_against_persona
 from .persona.embedder import PersonaEmbedder
+from .persona.markdown import summarize_for_prompt
 from .persona.schema import PersonaSpec
 from .persona.store import PersonaNotFoundError, get_default_store
 from .research import WebResult, gather_research
 from .state import AgentState
-from .x_client import XClient, XClientError
 
 log = logging.getLogger(__name__)
 
@@ -245,17 +249,28 @@ def _voice_signals_from_examples(examples: list[str]) -> dict[str, Any]:
 
 
 def _persona_block(persona: dict | None, examples: list[str] | None = None) -> str:
+    """Render the writer-prompt block for ``persona``.
+
+    The primary content is the long-form ``personality.md`` profile,
+    which is a sectioned, transcript-quote-backed description of the
+    human. We also append a short ``MECHANICAL STYLE`` block derived from
+    the user's interview examples (lowercase / dropped punctuation /
+    in-group slang) and a couple of hard guardrails (banned phrases,
+    avoided topics) so the LLM has them in front of it even if the
+    markdown gets truncated for prompt budget.
+    """
     if not persona:
         return ""
     p = PersonaSpec.model_validate(persona)
+    lines: list[str] = [f"You are writing AS {p.name}."]
+    md = summarize_for_prompt(p.personality_md or "")
+    if md:
+        lines.append("")
+        lines.append("PERSONALITY PROFILE (your source of truth):")
+        lines.append(md)
+        lines.append("")
+
     signals = _voice_signals_from_examples(examples or [])
-    lines = [
-        f"You are writing AS {p.name}.",
-        (
-            f"Voice: formality={p.voice.formality}/5, brevity={p.voice.brevity}, "
-            f"humor={p.voice.humor}, sentence_length={p.voice.sentence_length}."
-        ),
-    ]
     style_hints: list[str] = []
     if signals["mostly_lowercase"]:
         style_hints.append("write in all lowercase (no capital letters)")
@@ -269,26 +284,13 @@ def _persona_block(persona: dict | None, examples: list[str] | None = None) -> s
             + ", ".join(signals["slang_used"])
         )
     if style_hints:
-        lines.append("Mechanical style requirements: " + "; ".join(style_hints) + ".")
-    if p.values:
-        lines.append("Values: " + "; ".join(p.values[:6]))
-    if p.opinions:
-        lines.append("Opinions you'd defend: " + "; ".join(p.opinions[:6]))
-    if p.signature_phrases:
-        lines.append(
-            "Signature phrases (use sparingly, only if natural): "
-            + ", ".join(p.signature_phrases[:8])
-        )
+        lines.append("MECHANICAL STYLE (from real samples): " + "; ".join(style_hints) + ".")
     if p.banned_phrases:
         lines.append(
             "NEVER use these phrases: " + ", ".join(p.banned_phrases[:12])
         )
     if p.topics_avoided:
         lines.append("Avoid these topics: " + ", ".join(p.topics_avoided[:6]))
-    if p.confidence_phrasing:
-        lines.append(f"When uncertain, phrase it like: {p.confidence_phrasing}")
-    if p.decision_style:
-        lines.append(f"Decision style: {p.decision_style}")
     return "\n".join(lines)
 
 
@@ -411,9 +413,9 @@ def format_for_x(state: AgentState) -> dict[str, Any]:
         return {"posts": [], "error": "format_for_x called with empty draft"}
 
     if mode == "single":
-        posts = [trim_to_single(draft, settings.x_max_tweet_chars)]
+        posts = [trim_to_single(draft, settings.max_tweet_chars)]
     else:
-        posts = split_into_thread(draft, settings.x_max_tweet_chars)
+        posts = split_into_thread(draft, settings.max_tweet_chars)
 
     log.info("format_for_x mode=%s tweets=%d", mode, len(posts))
     return {"posts": posts}
@@ -541,8 +543,15 @@ def persona_critic(state: AgentState) -> Command:
 
 
 def human_review(state: AgentState) -> Command:
-    """Pause the graph and surface the draft to a human reviewer."""
-    posts: list[str] = state.get("posts", [])
+    """Pause the graph and surface the draft to a human reviewer.
+
+    Approving simply records ``finalized=True`` and ends the graph; the
+    caller (CLI / API / SPA) presents the finalized posts to the user to
+    copy or hand off to X compose. We also enforce the persona disclosure
+    tag on the first tweet here, so an edit pass that removed it still
+    ships a compliant artifact.
+    """
+    posts: list[str] = list(state.get("posts", []))
     decision = interrupt({
         "kind": "review",
         "topic": state.get("topic", ""),
@@ -556,9 +565,12 @@ def human_review(state: AgentState) -> Command:
     action = (decision or {}).get("action", "approve").lower()
 
     if action == "approve":
-        return Command(update={"approved": True}, goto="post_to_x")
+        return Command(
+            update={"finalized": True, "posts": _enforce_disclosure(posts, state)},
+            goto="__end__",
+        )
     if action == "reject":
-        return Command(update={"rejected": True, "approved": False}, goto="__end__")
+        return Command(update={"rejected": True}, goto="__end__")
     if action == "edit":
         edited = (decision or {}).get("edited") or "\n\n".join(posts)
         return Command(update={"draft": edited}, goto="format_for_x")
@@ -568,43 +580,25 @@ def human_review(state: AgentState) -> Command:
     return Command(update={"rejected": True}, goto="__end__")
 
 
-# --------------------------------------------------------------- post-to-x node
-
-
-def post_to_x(state: AgentState) -> dict[str, Any]:
-    """Post the approved tweets to X (or simulate in dry-run mode).
-
-    When a persona is loaded and ``is_real_person`` is True, the disclosure
-    text from the persona spec is enforced on the first tweet (appended if
-    the user removed it during edit).
-    """
-    posts: list[str] = list(state.get("posts", []))
+def _enforce_disclosure(posts: list[str], state: AgentState) -> list[str]:
+    """Append/split the persona disclosure tag on the first tweet if needed."""
     if not posts:
-        return {"error": "post_to_x called with no posts"}
-
+        return posts
     persona = state.get("persona")
-    if persona:
-        spec = PersonaSpec.model_validate(persona)
-        if spec.requires_disclosure():
-            posts[0] = spec.ensure_disclosed(posts[0])
-            settings = get_settings()
-            if len(posts[0]) > settings.x_max_tweet_chars:
-                # Disclosure pushed us over the limit -> append as a new tweet.
-                tag = spec.disclosure_text.strip()
-                posts[0] = posts[0].replace("\n\n" + tag, "").rstrip()
-                posts.append(tag)
-                log.info("post_to_x disclosure split into separate tweet")
-
-    client = XClient()
+    if not persona:
+        return posts
     try:
-        ids = client.post_thread(posts)
-    except XClientError as exc:
-        log.error("post_to_x failed: %s", exc)
-        return {"error": str(exc)}
-
-    url = client.tweet_url(ids[0]) if ids else None
-    log.info(
-        "post_to_x posted %d tweet(s) first_id=%s",
-        len(ids), ids[0] if ids else None,
-    )
-    return {"tweet_ids": ids, "tweet_url": url, "posts": posts}
+        spec = PersonaSpec.model_validate(persona)
+    except Exception:  # noqa: BLE001
+        return posts
+    if not spec.requires_disclosure():
+        return posts
+    out = list(posts)
+    out[0] = spec.ensure_disclosed(out[0])
+    settings = get_settings()
+    if len(out[0]) > settings.max_tweet_chars:
+        tag = spec.disclosure_text.strip()
+        out[0] = out[0].replace("\n\n" + tag, "").rstrip()
+        out.append(tag)
+        log.info("human_review disclosure split into separate tweet")
+    return out

@@ -23,11 +23,8 @@ class AgentState(TypedDict, total=False):
     draft: str
     posts: list[str]
 
-    approved: bool
+    finalized: bool
     rejected: bool
-
-    tweet_ids: list[str]
-    tweet_url: str | None
 
     error: str | None
 

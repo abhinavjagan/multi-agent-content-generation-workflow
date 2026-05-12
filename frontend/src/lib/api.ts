@@ -184,6 +184,30 @@ export const resumeExtract = (personaId: string): Promise<PersonaSpec> =>
     { method: "POST" },
   );
 
+export interface PersonalityResponse {
+  persona_id: string;
+  markdown: string;
+}
+
+export const getPersonaPersonality = (
+  personaId: string,
+): Promise<PersonalityResponse> =>
+  request<PersonalityResponse>(
+    `/personas/${encodeURIComponent(personaId)}/personality`,
+  );
+
+export const putPersonaPersonality = (
+  personaId: string,
+  markdown: string,
+): Promise<PersonalityResponse> =>
+  request<PersonalityResponse>(
+    `/personas/${encodeURIComponent(personaId)}/personality`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ markdown }),
+    },
+  );
+
 // --------------------------------------------------------------- eval (SSE)
 
 export interface StreamEvalHandlers {

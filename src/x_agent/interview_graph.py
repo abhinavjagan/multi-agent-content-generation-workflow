@@ -120,6 +120,33 @@ def ask_next_question(state: InterviewState) -> Command:
         "is_holdout": False,
     }
     transcript.append(entry)
+
+    # Persist progressively to disk so a refresh / server crash does not
+    # lose interview answers. The directory + spec placeholder are
+    # created lazily on the first answer; subsequent answers append to
+    # the existing transcript.jsonl. Best-effort: failures don't block
+    # the interview, they're just logged.
+    persona_id = state.get("persona_id")
+    if persona_id:
+        try:
+            store = get_default_store()
+            if not store.exists(persona_id):
+                name = (state.get("name") or "").strip() or "subject"
+                is_real = bool(state.get("is_real_person", True))
+                placeholder = PersonaSpec(
+                    id=persona_id,
+                    name=name,
+                    is_real_person=is_real,
+                    consent_recorded_at=utcnow() if is_real else None,
+                    disclosure_text=(state.get("disclosure_text") or "").strip(),
+                )
+                store.save(placeholder)
+            store.append_transcript(
+                persona_id, TranscriptEntry.model_validate(entry)
+            )
+        except Exception as exc:  # noqa: BLE001 - best-effort
+            log.warning("interview.persist_answer failed: %s", exc)
+
     return Command(
         update={
             "transcript": transcript,

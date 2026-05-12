@@ -24,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import uuid
 from pathlib import Path
 from typing import Any, Iterator, Literal, Optional
@@ -122,11 +121,10 @@ class DraftRequest(BaseModel):
     style: str = Field(default="punchy, technical, plain prose", max_length=200)
     model: Optional[str] = Field(default=None, max_length=120)
     persona_id: Optional[str] = Field(default=None, max_length=80)
-    dry_run: bool = False
     # Optional: skip generation and use these as the draft. Set by the UI
     # when the user picks one of the parallel variants returned from
     # ``POST /api/draft/variants``. Each post is bounded by
-    # ``x_max_tweet_chars`` plus a safety margin; the list itself is bounded
+    # ``max_tweet_chars`` plus a safety margin; the list itself is bounded
     # so a malicious caller cannot stuff arbitrary content.
     seed_posts: Optional[list[str]] = Field(default=None, max_length=20)
     # Web research opt-in. ``research_urls`` (when non-empty) takes
@@ -219,8 +217,7 @@ class ApproveResponse(BaseModel):
     thread_id: str
     posts: list[str]
     awaiting_review: bool
-    tweet_ids: list[str] = Field(default_factory=list)
-    tweet_url: Optional[str] = None
+    finalized: bool = False
     rejected: bool = False
     error: Optional[str] = None
     critic_score: Optional[int] = None
@@ -294,6 +291,17 @@ class RefineRequest(BaseModel):
     entries: list[RefineEntry] = Field(..., max_length=200)
 
 
+class PersonalityUpdateRequest(BaseModel):
+    """Body for ``PUT /api/personas/{id}/personality``."""
+
+    markdown: str = Field(..., max_length=40_000)
+
+
+class PersonalityResponse(BaseModel):
+    persona_id: str
+    markdown: str
+
+
 class EvalRequest(BaseModel):
     prompts: Optional[list[str]] = Field(default=None, max_length=64)
     mode: Literal["single", "thread"] = "single"
@@ -302,7 +310,6 @@ class EvalRequest(BaseModel):
 class HealthResponse(BaseModel):
     version: str
     ollama: dict[str, Any]
-    x: dict[str, Any]
     personas: dict[str, Any]
     config: dict[str, Any]
 
@@ -455,15 +462,12 @@ def health() -> HealthResponse:
     return HealthResponse(
         version=__version__,
         ollama=_ollama_status(),
-        x={
-            "has_credentials": settings.has_x_credentials,
-            "max_tweet_chars": settings.x_max_tweet_chars,
-        },
         personas={
             "count": persona_count,
             "dir": str(Path(settings.persona_dir).expanduser()),
         },
         config={
+            "max_tweet_chars": settings.max_tweet_chars,
             "critic_min_score": settings.critic_min_score,
             "critic_max_attempts": settings.critic_max_attempts,
             "persona_top_k": settings.persona_top_k,
@@ -540,11 +544,6 @@ def _do_draft(req: DraftRequest) -> DraftResponse:
     research_urls = _validate_research_urls(req.research_urls)
 
     settings = get_settings()
-    effective_dry_run = req.dry_run or not settings.has_x_credentials
-    if effective_dry_run:
-        os.environ["X_AGENT_FORCE_DRY_RUN"] = "1"
-    else:
-        os.environ.pop("X_AGENT_FORCE_DRY_RUN", None)
 
     thread_id = uuid.uuid4().hex
     initial: dict = {"topic": topic, "style": req.style, "mode": req.mode}
@@ -556,7 +555,7 @@ def _do_draft(req: DraftRequest) -> DraftResponse:
         # Defensively cap each seeded post to the configured tweet limit + a
         # small slack so the rest of the pipeline (format_for_x) cannot be
         # forced to produce oversize tweets via this path.
-        max_chars = settings.x_max_tweet_chars + 16
+        max_chars = settings.max_tweet_chars + 16
         cleaned = [
             (p or "").strip()[:max_chars]
             for p in req.seed_posts
@@ -766,8 +765,7 @@ def _do_approve(thread_id: str, req: ApproveRequest) -> ApproveResponse:
         thread_id=thread_id,
         posts=posts,
         awaiting_review=review is not None,
-        tweet_ids=state.get("tweet_ids", []),
-        tweet_url=state.get("tweet_url"),
+        finalized=bool(state.get("finalized")),
         rejected=bool(state.get("rejected")),
         error=state.get("error"),
         critic_score=(review or {}).get("critic_score"),
@@ -871,6 +869,43 @@ def get_persona(persona_id: str) -> dict:
     except PersonaNotFoundError:
         raise HTTPException(status_code=404, detail="persona not found")
     return spec.model_dump(mode="json")
+
+
+@app.get(
+    "/api/personas/{persona_id}/personality",
+    response_model=PersonalityResponse,
+)
+def get_persona_personality(persona_id: str) -> "PersonalityResponse":
+    """Return the persona's long-form personality.md profile."""
+    store = get_default_store()
+    if not store.exists(persona_id):
+        raise HTTPException(status_code=404, detail="persona not found")
+    try:
+        md = store.read_personality(persona_id)
+    except PersonaNotFoundError:
+        raise HTTPException(status_code=404, detail="persona not found")
+    return PersonalityResponse(persona_id=persona_id, markdown=md)
+
+
+@app.put(
+    "/api/personas/{persona_id}/personality",
+    response_model=PersonalityResponse,
+)
+def put_persona_personality(
+    persona_id: str, req: "PersonalityUpdateRequest"
+) -> "PersonalityResponse":
+    """Overwrite the persona's personality.md profile."""
+    store = get_default_store()
+    if not store.exists(persona_id):
+        raise HTTPException(status_code=404, detail="persona not found")
+    md = (req.markdown or "").strip()
+    if len(md) > 40_000:
+        raise HTTPException(
+            status_code=413,
+            detail="personality.md too long (max 40,000 chars)",
+        )
+    store.write_personality(persona_id, md)
+    return PersonalityResponse(persona_id=persona_id, markdown=md)
 
 
 @app.get(
@@ -1037,7 +1072,6 @@ def _eval_iter(
     store = get_default_store()
     spec = store.load(persona_id)
 
-    os.environ["X_AGENT_FORCE_DRY_RUN"] = "1"
     eval_graph = build_graph()
 
     scores: list[int] = []

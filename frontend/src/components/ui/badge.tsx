@@ -11,12 +11,12 @@ type Variant =
   | "muted";
 
 const VARIANT_CLASS: Record<Variant, string> = {
-  default: "bg-primary/15 text-primary border-primary/25",
-  secondary: "bg-secondary text-secondary-foreground border-border",
-  outline: "border-border text-foreground/80",
-  success: "bg-success/15 text-success border-success/30",
-  warning: "bg-warning/15 text-warning border-warning/35",
-  destructive: "bg-destructive/15 text-destructive border-destructive/35",
+  default: "bg-primary/20 text-primary border-primary/40 shadow-[0_2px_8px_-4px_hsl(var(--primary)/0.45)]",
+  secondary: "bg-secondary text-secondary-foreground border-primary/15",
+  outline: "border-primary/30 text-foreground/85",
+  success: "bg-success/20 text-success border-success/45 shadow-[0_2px_8px_-4px_hsl(var(--success)/0.4)]",
+  warning: "bg-warning/20 text-warning border-warning/45 shadow-[0_2px_8px_-4px_hsl(var(--warning)/0.4)]",
+  destructive: "bg-destructive/20 text-destructive border-destructive/45 shadow-[0_2px_8px_-4px_hsl(var(--destructive)/0.4)]",
   muted: "bg-muted text-muted-foreground border-border",
 };
 

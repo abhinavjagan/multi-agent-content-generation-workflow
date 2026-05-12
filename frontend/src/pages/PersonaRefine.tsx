@@ -103,7 +103,10 @@ export default function PersonaRefine() {
       navigate(`/personas/${id}`);
     },
     onError: (err) => {
-      toast.error(err instanceof ApiError ? err.detail : (err as Error).message);
+      toast.error(err instanceof ApiError ? err.detail : (err as Error).message, {
+        description:
+          "Your draft answers are still in this form — fix the issue and resubmit. Nothing was lost.",
+      });
     },
   });
 

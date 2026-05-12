@@ -52,15 +52,14 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Editable install (with dev extras) so the `x-agent` console script defined
-# in pyproject.toml resolves inside the container, and so the test suite can
-# be run with `docker compose exec app pytest -q` without extra setup. Copy
-# the build inputs first so this layer is cached across source edits that
-# don't touch pyproject.toml or src/.
+# Editable install (runtime extras only) so the `x-agent` console script
+# defined in pyproject.toml resolves inside the container. Dev extras (pytest,
+# mypy, ruff) deliberately live outside the runtime image — run them locally
+# with `pip install -e .[dev]` or via CI. Copy the build inputs first so this
+# layer is cached across source edits that don't touch pyproject.toml or src/.
 COPY pyproject.toml ./
 COPY src/ ./src/
-COPY tests/ ./tests/
-RUN pip install -e ".[dev]"
+RUN pip install -e .
 
 # Built SPA goes where SPAStaticFiles in src/x_agent/server.py expects it
 # (Path(__file__).resolve().parents[2] / "frontend" / "dist" -> /app/frontend/dist).

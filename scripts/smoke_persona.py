@@ -2,10 +2,9 @@
 
 What this exercises:
 1. Canned interview answers fed through the interview graph.
-2. The extractor LLM call building a PersonaSpec.
+2. The extractor LLM call building a PersonaSpec + personality.md.
 3. The persona-conditioned writer + retrieval + critic loop.
-4. Disclosure auto-injection for is_real_person personas.
-5. Dry-run X post.
+4. Disclosure auto-injection for is_real_person personas at finalize time.
 
 Requires a local Ollama with both a chat model (OLLAMA_MODEL or
 ``llama3:latest``) and the embedding model ``nomic-embed-text``::
@@ -22,8 +21,6 @@ import sys
 import tempfile
 import uuid
 from pathlib import Path
-
-os.environ["X_AGENT_FORCE_DRY_RUN"] = "1"
 
 # Use an isolated persona dir so we don't pollute the user's real one.
 _TMP_DIR = Path(tempfile.mkdtemp(prefix="x-agent-smoke-"))

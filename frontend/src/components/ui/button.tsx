@@ -14,16 +14,23 @@ type Variant =
 type Size = "sm" | "md" | "lg" | "icon";
 
 const VARIANT_CLASS: Record<Variant, string> = {
+  // Warm orange -> coral gradient with a soft glow. Picks up
+  // .btn-pop from index.css for the gradient + lift-on-hover; we
+  // still set text-primary-foreground so disabled states (which drop
+  // the gradient via the .btn-pop rule order) stay legible.
   default:
-    "bg-primary text-primary-foreground hover:bg-primary/90 active:bg-primary/95 shadow-sm",
+    "btn-pop text-primary-foreground",
   secondary:
-    "bg-secondary text-secondary-foreground hover:bg-secondary/80 active:bg-secondary/90",
-  outline:
-    "border border-border bg-transparent hover:bg-accent hover:text-accent-foreground",
-  ghost: "hover:bg-accent hover:text-accent-foreground",
+    "bg-secondary text-secondary-foreground hover:bg-secondary/70 active:bg-secondary/90 border border-primary/15 shadow-sm",
+  // Gradient-border outline that fills on hover. See .btn-pop-outline
+  // for the mask trick. Keeps the page calm but pops on intent.
+  outline: "btn-pop-outline",
+  ghost:
+    "text-foreground/85 hover:bg-primary/10 hover:text-primary active:bg-primary/15",
   destructive:
-    "bg-destructive text-destructive-foreground hover:bg-destructive/90",
-  subtle: "bg-muted text-foreground hover:bg-accent",
+    "bg-destructive text-destructive-foreground hover:bg-destructive/90 shadow-[0_8px_24px_-8px_hsl(var(--destructive)/0.55)]",
+  subtle:
+    "bg-primary/10 text-primary hover:bg-primary/15 active:bg-primary/20",
   link: "text-primary underline-offset-4 hover:underline",
 };
 

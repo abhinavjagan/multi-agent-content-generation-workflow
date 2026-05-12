@@ -4,7 +4,7 @@ import {
   CheckCircle2,
   Copy,
   Globe,
-  KeyRound,
+  Lock,
   RefreshCw,
   Server,
   Settings as SettingsIcon,
@@ -59,10 +59,7 @@ export default function Settings() {
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">
           <OllamaCard health={health.data.ollama} />
-          <XCard
-            hasCreds={health.data.x.has_credentials}
-            maxChars={health.data.x.max_tweet_chars}
-          />
+          <OutputCard maxChars={health.data.config.max_tweet_chars} />
           <CriticCard
             criticMin={health.data.config.critic_min_score}
             criticMax={health.data.config.critic_max_attempts}
@@ -246,41 +243,37 @@ function OllamaCard({ health: h }: { health: OllamaStatus }) {
   );
 }
 
-function XCard({
-  hasCreds,
-  maxChars,
-}: {
-  hasCreds: boolean;
-  maxChars: number;
-}) {
+function OutputCard({ maxChars }: { maxChars: number }) {
   return (
     <Card>
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
           <div>
             <CardTitle className="flex items-center gap-2 text-base">
-              <KeyRound className="h-5 w-5 text-primary" />
-              X (Twitter)
+              <Lock className="h-5 w-5 text-primary" />
+              Output mode
             </CardTitle>
-            <CardDescription>OAuth 1.0a user-context tokens</CardDescription>
+            <CardDescription>
+              Local-first: x-agent never posts on your behalf.
+            </CardDescription>
           </div>
-          {hasCreds ? (
-            <Badge variant="success">configured</Badge>
-          ) : (
-            <Badge variant="muted">missing → dry-run only</Badge>
-          )}
+          <Badge variant="success">local-only</Badge>
         </div>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        <Field label="Max tweet chars" value={String(maxChars)} mono />
-        <Alert variant={hasCreds ? "default" : "warning"}>
-          <AlertTitle>
-            {hasCreds ? "Posts will hit X" : "All posts forced to dry-run"}
-          </AlertTitle>
+        <Field
+          label="Max tweet chars"
+          value={String(maxChars)}
+          mono
+          hint="Cap each formatted post at this many characters. Drafts that overflow are split into a numbered thread."
+        />
+        <Alert>
+          <AlertTitle>You publish, x-agent doesn't</AlertTitle>
           <AlertDescription>
-            Credentials are loaded from <code className="font-mono">.env</code>.
-            The server never returns token values; this UI only shows whether
-            all four OAuth keys are present.
+            After approval the UI shows the finalized thread with copy-all,
+            copy-each, and an <span className="font-mono">x.com/intent/tweet</span>
+            {" "}deep link. The deep link prefills X's own composer in a new tab so
+            you hit publish from your account, in your browser.
           </AlertDescription>
         </Alert>
       </CardContent>

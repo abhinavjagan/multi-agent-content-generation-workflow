@@ -4,56 +4,65 @@
 
 @layer base {
   :root {
-    --background: 220 30% 98%;
-    --foreground: 220 25% 12%;
+    --background: 240 30% 97%;
+    --foreground: 240 35% 10%;
     --card: 0 0% 100%;
-    --card-foreground: 220 25% 12%;
+    --card-foreground: 240 35% 10%;
     --popover: 0 0% 100%;
-    --popover-foreground: 220 25% 12%;
-    --primary: 217 91% 60%;
-    --primary-foreground: 220 30% 98%;
-    --secondary: 220 14% 96%;
-    --secondary-foreground: 220 25% 12%;
-    --muted: 220 14% 96%;
-    --muted-foreground: 220 12% 45%;
-    --accent: 220 14% 92%;
-    --accent-foreground: 220 25% 12%;
-    --destructive: 0 72% 51%;
+    --popover-foreground: 240 35% 10%;
+    /* Indigo/blue primary with a magenta-pink end-stop. */
+    --primary: 248 88% 60%;
+    --primary-foreground: 0 0% 100%;
+    --primary-end: 322 82% 60%;
+    /* Cyan/sky accent + a softer pink for halos. */
+    --accent-pop: 195 92% 48%;
+    --accent-pink: 322 80% 62%;
+    --secondary: 240 30% 94%;
+    --secondary-foreground: 240 35% 10%;
+    --muted: 240 25% 94%;
+    --muted-foreground: 240 14% 38%;
+    --accent: 240 35% 92%;
+    --accent-foreground: 240 35% 10%;
+    --destructive: 0 80% 55%;
     --destructive-foreground: 0 0% 100%;
-    --success: 142 71% 35%;
+    --success: 162 70% 36%;
     --success-foreground: 0 0% 100%;
-    --warning: 35 92% 45%;
+    --warning: 38 96% 48%;
     --warning-foreground: 0 0% 100%;
-    --border: 220 14% 90%;
-    --input: 220 14% 90%;
-    --ring: 217 91% 60%;
-    --radius: 0.7rem;
+    --border: 240 20% 86%;
+    --input: 240 20% 86%;
+    --ring: 248 88% 60%;
+    --radius: 0.85rem;
   }
 
   .dark {
-    --background: 222 28% 6%;
-    --foreground: 220 14% 92%;
-    --card: 222 24% 9%;
-    --card-foreground: 220 14% 92%;
-    --popover: 222 24% 9%;
-    --popover-foreground: 220 14% 92%;
-    --primary: 217 92% 64%;
-    --primary-foreground: 222 28% 6%;
-    --secondary: 220 18% 14%;
-    --secondary-foreground: 220 14% 92%;
-    --muted: 220 18% 14%;
-    --muted-foreground: 220 10% 60%;
-    --accent: 220 20% 18%;
-    --accent-foreground: 220 14% 92%;
-    --destructive: 0 73% 55%;
+    /* Deep indigo ink, cool and saturated. */
+    --background: 235 45% 6%;
+    --foreground: 240 25% 95%;
+    --card: 235 38% 10%;
+    --card-foreground: 240 25% 95%;
+    --popover: 235 38% 10%;
+    --popover-foreground: 240 25% 95%;
+    --primary: 248 95% 68%;
+    --primary-foreground: 235 45% 6%;
+    --primary-end: 322 92% 66%;
+    --accent-pop: 195 100% 58%;
+    --accent-pink: 322 92% 66%;
+    --secondary: 235 30% 15%;
+    --secondary-foreground: 240 25% 95%;
+    --muted: 235 28% 15%;
+    --muted-foreground: 240 14% 72%;
+    --accent: 235 30% 18%;
+    --accent-foreground: 240 25% 95%;
+    --destructive: 0 85% 62%;
     --destructive-foreground: 0 0% 100%;
-    --success: 142 65% 50%;
-    --success-foreground: 222 28% 6%;
-    --warning: 35 92% 60%;
-    --warning-foreground: 222 28% 6%;
-    --border: 220 18% 18%;
-    --input: 220 18% 18%;
-    --ring: 217 92% 64%;
+    --success: 162 76% 52%;
+    --success-foreground: 235 45% 6%;
+    --warning: 38 100% 60%;
+    --warning-foreground: 235 45% 6%;
+    --border: 235 30% 22%;
+    --input: 235 30% 22%;
+    --ring: 248 95% 68%;
   }
 
   * {
@@ -87,17 +96,209 @@
     border-radius: 9999px;
   }
 
+  /* Indigo + magenta-pink + cyan ambient gradient. Pink stays mid-stop
+   * (not full bubblegum) and cyan keeps the cool depth balanced. */
   .grid-bg {
     background-image:
       radial-gradient(
-        circle at 0% 0%,
-        hsl(217 91% 60% / 0.08),
-        transparent 40%
+        circle at 6% -5%,
+        hsl(248 92% 65% / 0.32),
+        transparent 50%
       ),
       radial-gradient(
-        circle at 100% 0%,
-        hsl(280 80% 60% / 0.06),
-        transparent 40%
+        circle at 95% 5%,
+        hsl(322 85% 65% / 0.3),
+        transparent 50%
+      ),
+      radial-gradient(
+        circle at 60% 105%,
+        hsl(195 95% 55% / 0.26),
+        transparent 55%
+      ),
+      radial-gradient(
+        circle at 25% 65%,
+        hsl(280 80% 65% / 0.18),
+        transparent 55%
       );
+  }
+
+  .dark .grid-bg {
+    background-image:
+      radial-gradient(
+        circle at 6% -8%,
+        hsl(248 100% 65% / 0.5),
+        transparent 50%
+      ),
+      radial-gradient(
+        circle at 95% 5%,
+        hsl(322 95% 62% / 0.45),
+        transparent 50%
+      ),
+      radial-gradient(
+        circle at 60% 108%,
+        hsl(195 100% 55% / 0.4),
+        transparent 55%
+      ),
+      radial-gradient(
+        circle at 25% 65%,
+        hsl(280 92% 62% / 0.28),
+        transparent 55%
+      );
+  }
+
+  /* Grainy gradient overlay -- inspired by grainy-gradients
+   * (https://github.com/cjimmy/grainy-gradients). We inline a tiny SVG
+   * feTurbulence as a data URL so we get the noise texture with no
+   * extra HTTP request and no JS runtime cost. */
+  .bg-grainy {
+    position: relative;
+  }
+  .bg-grainy::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.4;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.55 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  }
+  .dark .bg-grainy::after {
+    opacity: 0.5;
+    mix-blend-mode: soft-light;
+  }
+
+  /* Liquid-glass surface -- inspired by liquid-glass-react.
+   * Frosted-glass background, tinted hairline border, inner highlight,
+   * vivid drop shadow. Pairs with .grid-bg / .bg-grainy on the page
+   * body so the contents read as a floating pane of glass over real
+   * colour. */
+  .surface-glass {
+    background-color: hsl(var(--card) / 0.7);
+    backdrop-filter: blur(22px) saturate(170%);
+    -webkit-backdrop-filter: blur(22px) saturate(170%);
+    border: 1px solid hsl(var(--primary) / 0.18);
+    box-shadow:
+      0 1px 0 0 hsl(0 0% 100% / 0.6) inset,
+      0 1px 2px 0 hsl(240 40% 8% / 0.06),
+      0 20px 44px -28px hsl(var(--primary) / 0.3),
+      0 22px 50px -22px hsl(var(--accent-pink) / 0.18);
+  }
+  .dark .surface-glass {
+    background-color: hsl(var(--card) / 0.72);
+    border-color: hsl(var(--primary) / 0.3);
+    box-shadow:
+      0 1px 0 0 hsl(0 0% 100% / 0.08) inset,
+      0 1px 2px 0 hsl(235 60% 2% / 0.6),
+      0 24px 56px -24px hsl(var(--primary) / 0.45),
+      0 28px 60px -20px hsl(var(--accent-pink) / 0.3);
+  }
+
+  .surface-glass-strong {
+    background-color: hsl(var(--card) / 0.86);
+    backdrop-filter: blur(30px) saturate(190%);
+    -webkit-backdrop-filter: blur(30px) saturate(190%);
+    border: 1px solid hsl(var(--primary) / 0.24);
+    box-shadow:
+      0 1px 0 0 hsl(0 0% 100% / 0.75) inset,
+      0 1px 2px 0 hsl(240 40% 8% / 0.08),
+      0 26px 56px -28px hsl(var(--primary) / 0.32),
+      0 28px 60px -22px hsl(var(--accent-pink) / 0.22);
+  }
+  .dark .surface-glass-strong {
+    background-color: hsl(var(--card) / 0.9);
+    border-color: hsl(var(--primary) / 0.36);
+  }
+
+  /* Indigo -> magenta-pink primary fill with a soft outer glow. Use
+   * on the highest-attention buttons (Generate, Approve, Start
+   * interview). Falls back to a flat colour if backdrop-filter or
+   * gradient is unsupported. */
+  .btn-pop {
+    background-image: linear-gradient(
+      135deg,
+      hsl(var(--primary)) 0%,
+      hsl(var(--primary-end)) 65%,
+      hsl(var(--accent-pink)) 100%
+    );
+    color: hsl(var(--primary-foreground));
+    box-shadow:
+      0 1px 0 0 hsl(0 0% 100% / 0.35) inset,
+      0 8px 22px -6px hsl(var(--primary) / 0.5),
+      0 12px 32px -10px hsl(var(--accent-pink) / 0.45);
+    transition:
+      transform 120ms ease,
+      box-shadow 160ms ease,
+      filter 120ms ease;
+  }
+  .btn-pop:hover:not(:disabled) {
+    transform: translateY(-1px);
+    filter: brightness(1.06) saturate(1.05);
+    box-shadow:
+      0 1px 0 0 hsl(0 0% 100% / 0.4) inset,
+      0 12px 30px -6px hsl(var(--primary) / 0.6),
+      0 18px 44px -10px hsl(var(--accent-pink) / 0.55);
+  }
+  .btn-pop:active:not(:disabled) {
+    transform: translateY(0);
+    filter: brightness(0.98);
+  }
+
+  /* Outline that still pops: vivid gradient border via mask trick. */
+  .btn-pop-outline {
+    position: relative;
+    background-color: hsl(var(--card) / 0.6);
+    color: hsl(var(--primary));
+    border: 1px solid transparent;
+    background-image:
+      linear-gradient(hsl(var(--card) / 0.6), hsl(var(--card) / 0.6)),
+      linear-gradient(135deg, hsl(var(--primary)), hsl(var(--primary-end)));
+    background-origin: border-box;
+    background-clip: padding-box, border-box;
+    transition:
+      transform 120ms ease,
+      box-shadow 160ms ease,
+      color 120ms ease;
+  }
+  .btn-pop-outline:hover:not(:disabled) {
+    color: hsl(var(--primary-foreground));
+    background-image:
+      linear-gradient(
+        135deg,
+        hsl(var(--primary) / 0.92),
+        hsl(var(--primary-end) / 0.92)
+      ),
+      linear-gradient(135deg, hsl(var(--primary)), hsl(var(--primary-end)));
+    transform: translateY(-1px);
+    box-shadow:
+      0 8px 22px -8px hsl(var(--primary) / 0.45),
+      0 14px 32px -10px hsl(var(--primary-end) / 0.4);
+  }
+
+  /* Reusable glow shadow for cards, focus rings, and CoolShape halos. */
+  .shadow-glow {
+    box-shadow:
+      0 0 0 1px hsl(var(--primary) / 0.25),
+      0 12px 32px -8px hsl(var(--primary) / 0.45),
+      0 22px 50px -16px hsl(var(--primary-end) / 0.35);
+  }
+
+  /* Gradient text accent: indigo -> magenta-pink -> cyan. */
+  .text-gradient-pop {
+    background-image: linear-gradient(
+      120deg,
+      hsl(var(--primary)),
+      hsl(var(--primary-end)) 55%,
+      hsl(var(--accent-pop))
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Coolshape accent halos -- a touch hotter than the previous version
+   * so the pink/teal stops actually register on the dark theme. */
+  .coolshape-blur {
+    filter: blur(38px) saturate(150%);
+    opacity: 0.65;
   }
 }

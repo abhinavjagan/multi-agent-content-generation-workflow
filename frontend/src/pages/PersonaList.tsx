@@ -49,7 +49,10 @@ export default function PersonaList() {
       setPendingDelete(null);
     },
     onError: (err) => {
-      toast.error(err instanceof ApiError ? err.detail : (err as Error).message);
+      toast.error(err instanceof ApiError ? err.detail : (err as Error).message, {
+        description:
+          "Persona may already be gone — refresh the list to check, or remove the directory under ~/.x-agent/personas manually if it's stuck.",
+      });
     },
   });
 

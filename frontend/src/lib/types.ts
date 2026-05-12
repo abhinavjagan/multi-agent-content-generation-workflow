@@ -15,11 +15,6 @@ export interface OllamaStatus {
   error: string | null;
 }
 
-export interface XStatus {
-  has_credentials: boolean;
-  max_tweet_chars: number;
-}
-
 export interface PersonaStats {
   count: number;
   dir: string;
@@ -38,6 +33,7 @@ export interface ResearchConfig {
 }
 
 export interface AppConfig {
+  max_tweet_chars: number;
   critic_min_score: number;
   critic_max_attempts: number;
   persona_top_k: number;
@@ -47,7 +43,6 @@ export interface AppConfig {
 export interface Health {
   version: string;
   ollama: OllamaStatus;
-  x: XStatus;
   personas: PersonaStats;
   config: AppConfig;
 }
@@ -73,7 +68,6 @@ export interface DraftRequest {
   style?: string;
   model?: string | null;
   persona_id?: string | null;
-  dry_run?: boolean;
   /**
    * Optional pre-generated posts. When set, the backend skips the LLM
    * generation step and treats these as the draft, then runs the critic +
@@ -143,8 +137,7 @@ export interface ApproveResponse {
   thread_id: string;
   posts: string[];
   awaiting_review: boolean;
-  tweet_ids: string[];
-  tweet_url: string | null;
+  finalized: boolean;
   rejected: boolean;
   error: string | null;
   critic_score: number | null;
@@ -197,6 +190,17 @@ export interface PersonaSpec {
   topics_avoided: string[];
   decision_style: string;
   confidence_phrasing: string;
+  // Richer personality dimensions (added in v0.2.0).
+  cadence: string;
+  idioms: string[];
+  story_seeds: string[];
+  pet_peeves: string[];
+  enthusiasm_tells: string[];
+  conviction_signals: string[];
+  apology_pattern: string;
+  emotional_range: string;
+  // Long-form narrative profile (Markdown) used by the writer prompt.
+  personality_md: string;
   created_at: string;
   updated_at: string;
 }

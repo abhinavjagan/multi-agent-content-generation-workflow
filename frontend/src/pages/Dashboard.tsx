@@ -1,15 +1,18 @@
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
   CheckCircle2,
+  Copy,
   Cpu,
-  KeyRound,
   PenLine,
+  Send,
   Sparkles,
   Users,
   XCircle,
 } from "lucide-react";
+import { toast } from "sonner";
 import {
   Card,
   CardContent,
@@ -21,30 +24,63 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { CoolShape } from "@/components/decor/CoolShape";
 import { getHealth, listPersonas } from "@/lib/api";
+import {
+  type RecentDraft,
+  listRecentDrafts,
+  xIntentUrl,
+} from "@/lib/recentDrafts";
 
 export default function Dashboard() {
   const health = useQuery({ queryKey: ["health"], queryFn: getHealth });
   const personas = useQuery({ queryKey: ["personas"], queryFn: listPersonas });
+  const recent = useRecentDrafts();
 
-  const ollamaOk = health.data?.ollama.ok && health.data.ollama.has_configured_model;
+  const ollamaOk =
+    health.data?.ollama.ok && health.data.ollama.has_configured_model;
 
   return (
     <div className="space-y-8 animate-fade-in">
-      <section className="relative overflow-hidden rounded-2xl border border-border bg-card p-8 shadow-sm">
-        <div className="grid gap-6 lg:grid-cols-[2fr,1fr] lg:items-end">
+      <section className="surface-glass relative overflow-hidden rounded-2xl p-8">
+        <div
+          aria-hidden
+          className="coolshape-blur pointer-events-none absolute -top-16 -right-12"
+        >
+          <CoolShape
+            kind="star"
+            fromColor="hsl(248 92% 65%)"
+            toColor="hsl(322 88% 62%)"
+            size={260}
+          />
+        </div>
+        <div
+          aria-hidden
+          className="coolshape-blur pointer-events-none absolute -bottom-16 left-1/2"
+        >
+          <CoolShape
+            kind="blob"
+            fromColor="hsl(195 95% 55%)"
+            toColor="hsl(322 88% 62%)"
+            size={300}
+          />
+        </div>
+
+        <div className="relative grid gap-6 lg:grid-cols-[2fr,1fr] lg:items-end">
           <div className="space-y-3">
             <Badge variant="default" className="w-fit">
               <Sparkles className="h-3 w-3" />
-              local-first
+              local-first · never publishes
             </Badge>
             <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-              Draft, review, and post to X — with your own voice.
+              Draft posts in{" "}
+              <span className="text-gradient-pop">your voice</span>. Copy. Done.
             </h1>
             <p className="max-w-2xl text-base text-muted-foreground">
-              Generate posts with a local Ollama model, optionally as a saved
-              persona. Every draft runs through a consistency critic, then
-              pauses for your review before anything is published.
+              Generate posts locally with Ollama, shaped by a saved persona's
+              personality profile. Every draft pauses for review, then hands you
+              a polished artifact and a one-click deep link into X compose. We
+              never log into anything.
             </p>
             <div className="flex flex-wrap gap-2 pt-2">
               <Button asChild>
@@ -63,7 +99,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-border bg-background/40 p-4">
+          <div className="surface-glass-strong rounded-xl p-4">
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
               Quick status
             </p>
@@ -81,16 +117,6 @@ export default function Dashboard() {
                 )}
               </li>
               <li className="flex items-center justify-between">
-                <span className="text-muted-foreground">X credentials</span>
-                {health.isLoading ? (
-                  <Skeleton className="h-4 w-16" />
-                ) : health.data?.x.has_credentials ? (
-                  <Badge variant="success">configured</Badge>
-                ) : (
-                  <Badge variant="muted">dry-run only</Badge>
-                )}
-              </li>
-              <li className="flex items-center justify-between">
                 <span className="text-muted-foreground">Personas</span>
                 {personas.isLoading ? (
                   <Skeleton className="h-4 w-12" />
@@ -99,6 +125,10 @@ export default function Dashboard() {
                     {personas.data?.length ?? 0}
                   </span>
                 )}
+              </li>
+              <li className="flex items-center justify-between">
+                <span className="text-muted-foreground">Recent drafts</span>
+                <span className="font-mono text-xs">{recent.length}</span>
               </li>
             </ul>
           </div>
@@ -122,7 +152,7 @@ export default function Dashboard() {
         </Alert>
       ) : null}
 
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <section className="grid gap-4 sm:grid-cols-3">
         <StatusCard
           icon={<Cpu className="h-5 w-5" />}
           title="Generation model"
@@ -137,31 +167,59 @@ export default function Dashboard() {
           }
         />
         <StatusCard
-          icon={<KeyRound className="h-5 w-5" />}
-          title="X publishing"
-          value={
-            health.data?.x.has_credentials ? "OAuth 1.0a configured" : "no credentials"
-          }
-          hint={`max ${health.data?.x.max_tweet_chars ?? 275} chars per tweet`}
-          status={health.data?.x.has_credentials ? "success" : "muted"}
-        />
-        <StatusCard
           icon={<Users className="h-5 w-5" />}
           title="Saved personas"
           value={`${personas.data?.length ?? 0}`}
           hint={
-            health.data?.personas.dir
-              ? health.data.personas.dir.replace(
-                  health.data.personas.dir.split("/").slice(-3, -2)[0] ?? "",
-                  health.data.personas.dir.split("/").slice(-3, -2)[0] ?? "",
-                )
-              : ""
+            personas.data?.length
+              ? "click below to draft or refine one"
+              : "create one to clone a voice"
           }
-          status="default"
+          status={personas.data?.length ? "success" : "muted"}
+        />
+        <StatusCard
+          icon={<PenLine className="h-5 w-5" />}
+          title="Recent drafts"
+          value={`${recent.length}`}
+          hint={
+            recent.length
+              ? "kept locally; never uploaded anywhere"
+              : "draft something to see it here"
+          }
+          status={recent.length ? "default" : "muted"}
         />
       </section>
 
-      <section>
+      <section className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Recent drafts</CardTitle>
+            <CardDescription>
+              Locally finalized drafts. Re-copy or open directly in X compose.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {recent.length === 0 ? (
+              <div className="rounded-md border border-dashed border-border/60 bg-background/30 p-6 text-center text-sm text-muted-foreground">
+                No drafts yet.{" "}
+                <Link
+                  to="/draft"
+                  className="text-primary underline-offset-2 hover:underline"
+                >
+                  Compose one
+                </Link>
+                .
+              </div>
+            ) : (
+              <ul className="space-y-3">
+                {recent.slice(0, 5).map((draft) => (
+                  <RecentDraftRow key={draft.id} draft={draft} />
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle>Recent personas</CardTitle>
@@ -176,15 +234,18 @@ export default function Dashboard() {
                 <Skeleton className="h-12 w-full" />
               </div>
             ) : !personas.data?.length ? (
-              <div className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+              <div className="rounded-md border border-dashed border-border/60 bg-background/30 p-6 text-center text-sm text-muted-foreground">
                 No personas yet.{" "}
-                <Link to="/personas/new" className="text-primary underline-offset-2 hover:underline">
+                <Link
+                  to="/personas/new"
+                  className="text-primary underline-offset-2 hover:underline"
+                >
                   Create your first
                 </Link>
                 .
               </div>
             ) : (
-              <ul className="divide-y divide-border">
+              <ul className="divide-y divide-border/60">
                 {personas.data.slice(0, 5).map((p) => (
                   <li
                     key={p.id}
@@ -224,6 +285,79 @@ export default function Dashboard() {
       </section>
     </div>
   );
+}
+
+function RecentDraftRow({ draft }: { draft: RecentDraft }) {
+  const preview = (draft.posts[0] ?? "").slice(0, 140);
+  const fullText = draft.posts.join("\n\n");
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(fullText);
+      toast.success("Copied to clipboard.");
+    } catch {
+      toast.error("Clipboard not available.");
+    }
+  };
+
+  const intent = draft.posts[0] ? xIntentUrl(draft.posts[0]) : null;
+
+  return (
+    <li className="surface-glass rounded-xl p-3 text-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate font-medium" title={draft.topic}>
+            {draft.topic || "(untitled)"}
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {new Date(draft.finalized_at).toLocaleString()} · {draft.posts.length}{" "}
+            tweet{draft.posts.length === 1 ? "" : "s"} · {draft.mode}
+            {draft.persona_name ? ` · as ${draft.persona_name}` : ""}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleCopy}
+            title="Copy all tweets"
+          >
+            <Copy className="h-3.5 w-3.5" />
+          </Button>
+          {intent ? (
+            <Button asChild variant="outline" size="sm">
+              <a
+                href={intent}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open the first tweet in X compose"
+              >
+                <Send className="h-3.5 w-3.5" />
+              </a>
+            </Button>
+          ) : null}
+        </div>
+      </div>
+      <p className="mt-2 line-clamp-2 whitespace-pre-wrap font-mono text-xs text-muted-foreground">
+        {preview}
+        {(draft.posts[0]?.length ?? 0) > 140 ? "…" : ""}
+      </p>
+    </li>
+  );
+}
+
+function useRecentDrafts(): RecentDraft[] {
+  const [drafts, setDrafts] = useState<RecentDraft[]>(() => listRecentDrafts());
+  useEffect(() => {
+    const handler = () => setDrafts(listRecentDrafts());
+    window.addEventListener("x-agent:recent-drafts", handler);
+    window.addEventListener("storage", handler);
+    return () => {
+      window.removeEventListener("x-agent:recent-drafts", handler);
+      window.removeEventListener("storage", handler);
+    };
+  }, []);
+  return drafts;
 }
 
 interface StatusCardProps {

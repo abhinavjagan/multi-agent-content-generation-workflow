@@ -148,7 +148,10 @@ export default function PersonaEval() {
             setRunning(false);
           },
           onError: (err) => {
-            toast.error(err.message);
+            toast.error(err.message, {
+              description:
+                "Eval stream interrupted. Verify Ollama is reachable in Settings and try again.",
+            });
           },
           signal: abortRef.current.signal,
         },
@@ -157,6 +160,10 @@ export default function PersonaEval() {
       if ((err as Error).name !== "AbortError") {
         toast.error(
           err instanceof ApiError ? err.detail : (err as Error).message,
+          {
+            description:
+              "Couldn't start the eval. Check that the persona exists and Ollama is up.",
+          },
         );
       }
       setRunning(false);

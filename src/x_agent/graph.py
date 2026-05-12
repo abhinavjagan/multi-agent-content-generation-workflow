@@ -13,7 +13,6 @@ from .nodes import (
     human_review,
     load_persona,
     persona_critic,
-    post_to_x,
     research,
     retrieve_examples,
 )
@@ -32,14 +31,18 @@ def build_graph() -> Any:
 
         START -> load_persona -> retrieve_examples -> research
               -> generate_draft -> format_for_x -> persona_critic
-              -> human_review -> post_to_x
+              -> human_review -> END
+
+    x-agent never publishes; ``human_review`` ends the graph after an
+    ``approve`` action and the caller hands the finalized posts back to
+    the user to copy or open in X compose themselves.
 
     ``persona_critic`` uses ``Command(goto=...)`` to either advance to
     ``human_review`` or loop back to ``generate_draft`` (skipping
     ``research`` -- the prior fetched context is reused on retries).
     ``human_review`` uses ``Command(goto=...)`` to dispatch to
-    ``post_to_x``, ``generate_draft``, ``format_for_x``, or END based on
-    the user's choice.
+    ``generate_draft``, ``format_for_x``, or END based on the user's
+    choice.
     """
     graph = StateGraph(AgentState)
 
@@ -50,7 +53,6 @@ def build_graph() -> Any:
     graph.add_node("format_for_x", format_for_x)
     graph.add_node("persona_critic", persona_critic)
     graph.add_node("human_review", human_review)
-    graph.add_node("post_to_x", post_to_x)
 
     graph.add_edge(START, "load_persona")
     graph.add_edge("load_persona", "retrieve_examples")
@@ -58,6 +60,5 @@ def build_graph() -> Any:
     graph.add_edge("research", "generate_draft")
     graph.add_edge("generate_draft", "format_for_x")
     graph.add_edge("format_for_x", "persona_critic")
-    graph.add_edge("post_to_x", END)
 
     return graph.compile(checkpointer=MemorySaver())

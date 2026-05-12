@@ -3,12 +3,15 @@ import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
+  CornerUpLeft,
   Megaphone,
   MessageSquare,
+  Save,
   ShieldCheck,
   SkipForward,
   Sparkles,
   Wand2,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -48,20 +51,62 @@ type Stage =
   | { kind: "interview"; state: InterviewState }
   | { kind: "done"; state: InterviewState };
 
+interface PersistedInterview {
+  form: ConsentForm;
+  state: InterviewState;
+  answer: string;
+  savedAt: string;
+}
+
+const INTERVIEW_KEY = "x-agent:interview:v1";
+
+function loadPersistedInterview(): PersistedInterview | null {
+  try {
+    const raw = window.localStorage.getItem(INTERVIEW_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistedInterview;
+    if (parsed && parsed.state && parsed.form) return parsed;
+  } catch {
+    // ignore corrupt blob
+  }
+  return null;
+}
+
+function savePersistedInterview(payload: PersistedInterview): void {
+  try {
+    window.localStorage.setItem(INTERVIEW_KEY, JSON.stringify(payload));
+  } catch {
+    // privacy mode / quota
+  }
+}
+
+function clearPersistedInterview(): void {
+  try {
+    window.localStorage.removeItem(INTERVIEW_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 export default function PersonaCreate() {
   const qc = useQueryClient();
   const navigate = useNavigate();
 
-  const [form, setForm] = useState<ConsentForm>({
-    name: "",
-    isReal: true,
-    handle: "",
-    disclosure: "",
-    quick: false,
-    consentAck: false,
-  });
+  const persisted = loadPersistedInterview();
+  const [form, setForm] = useState<ConsentForm>(
+    () =>
+      persisted?.form ?? {
+        name: "",
+        isReal: true,
+        handle: "",
+        disclosure: "",
+        quick: false,
+        consentAck: false,
+      },
+  );
   const [stage, setStage] = useState<Stage>({ kind: "consent" });
-  const [answer, setAnswer] = useState("");
+  const [answer, setAnswer] = useState(persisted?.answer ?? "");
+  const [showResumePrompt, setShowResumePrompt] = useState(!!persisted);
 
   // Auto-fill the disclosure tag from the handle, but only while the user
   // hasn't typed their own custom tag.
@@ -80,6 +125,47 @@ export default function PersonaCreate() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.handle, form.name, form.isReal]);
 
+  // Keep the in-progress answer + state mirrored to localStorage so a refresh
+  // or accidental tab close doesn't lose typed text.
+  useEffect(() => {
+    if (stage.kind !== "interview") return;
+    savePersistedInterview({
+      form,
+      state: stage.state,
+      answer,
+      savedAt: new Date().toISOString(),
+    });
+  }, [answer, form, stage]);
+
+  const handleResume = () => {
+    if (!persisted) return;
+    setShowResumePrompt(false);
+    setStage({ kind: "interview", state: persisted.state });
+    setAnswer(persisted.answer ?? "");
+  };
+
+  const handleDiscardSaved = () => {
+    clearPersistedInterview();
+    setShowResumePrompt(false);
+    setAnswer("");
+  };
+
+  const handleSaveAndExit = () => {
+    if (stage.kind === "interview") {
+      savePersistedInterview({
+        form,
+        state: stage.state,
+        answer,
+        savedAt: new Date().toISOString(),
+      });
+    }
+    toast.success("Interview saved", {
+      description:
+        "Your progress is saved locally and on disk under ~/.x-agent/personas. Reopen this page to resume.",
+    });
+    navigate("/personas");
+  };
+
   const startMutation = useMutation({
     mutationFn: () =>
       startInterview({
@@ -93,13 +179,28 @@ export default function PersonaCreate() {
       if (state.error) {
         toast.error(state.error);
       }
-      setStage(
-        state.saved ? { kind: "done", state } : { kind: "interview", state },
-      );
+      if (state.saved) {
+        clearPersistedInterview();
+        setStage({ kind: "done", state });
+      } else {
+        savePersistedInterview({
+          form,
+          state,
+          answer: "",
+          savedAt: new Date().toISOString(),
+        });
+        setStage({ kind: "interview", state });
+      }
       setAnswer("");
     },
     onError: (err) => {
-      toast.error(err instanceof ApiError ? err.detail : (err as Error).message);
+      toast.error(
+        err instanceof ApiError ? err.detail : (err as Error).message,
+        {
+          description:
+            "Check that Ollama is reachable and that the FastAPI server is up.",
+        },
+      );
     },
   });
 
@@ -109,16 +210,30 @@ export default function PersonaCreate() {
     onSuccess: (state) => {
       if (state.error) toast.error(state.error);
       if (state.saved) {
+        clearPersistedInterview();
         qc.invalidateQueries({ queryKey: ["personas"] });
         qc.invalidateQueries({ queryKey: ["health"] });
         setStage({ kind: "done", state });
       } else {
+        savePersistedInterview({
+          form,
+          state,
+          answer: "",
+          savedAt: new Date().toISOString(),
+        });
         setStage({ kind: "interview", state });
       }
       setAnswer("");
     },
     onError: (err) => {
-      toast.error(err instanceof ApiError ? err.detail : (err as Error).message);
+      const status = err instanceof ApiError ? err.status : 0;
+      const message =
+        err instanceof ApiError ? err.detail : (err as Error).message;
+      const description =
+        status === 404
+          ? "The server lost this interview's checkpoint (likely a restart). Start over — your previous answers are saved to ~/.x-agent/personas as a transcript."
+          : "Your answer is preserved locally; retry or hit Save & continue later.";
+      toast.error(message, { description });
     },
   });
 
@@ -231,37 +346,49 @@ export default function PersonaCreate() {
               disabled={submitDisabled}
             />
           </CardContent>
-          <CardFooter className="justify-end gap-2">
+          <CardFooter className="flex flex-wrap items-center justify-between gap-2">
             <Button
               variant="ghost"
-              onClick={() =>
-                answerMutation.mutate({
-                  threadId: state.thread_id,
-                  answer: "",
-                })
-              }
+              size="sm"
+              onClick={handleSaveAndExit}
               disabled={submitDisabled}
             >
-              <SkipForward className="h-4 w-4" />
-              Skip
+              <Save className="h-4 w-4" />
+              Save &amp; continue later
             </Button>
-            <Button
-              loading={answerMutation.isPending}
-              disabled={!answer.trim() || submitDisabled}
-              onClick={() =>
-                answerMutation.mutate({
-                  threadId: state.thread_id,
-                  answer: answer.trim(),
-                })
-              }
-            >
-              Submit answer
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="ghost"
+                onClick={() =>
+                  answerMutation.mutate({
+                    threadId: state.thread_id,
+                    answer: "",
+                  })
+                }
+                disabled={submitDisabled}
+              >
+                <SkipForward className="h-4 w-4" />
+                Skip
+              </Button>
+              <Button
+                loading={answerMutation.isPending}
+                disabled={!answer.trim() || submitDisabled}
+                onClick={() =>
+                  answerMutation.mutate({
+                    threadId: state.thread_id,
+                    answer: answer.trim(),
+                  })
+                }
+              >
+                Submit answer
+              </Button>
+            </div>
           </CardFooter>
         </Card>
         <p className="text-center text-xs text-muted-foreground">
-          You can leave this page; in-flight interviews use an in-memory
-          checkpointer and won't survive a server restart.
+          Your answers are mirrored to <span className="font-mono">localStorage</span>{" "}
+          and appended to <span className="font-mono">~/.x-agent/personas/&lt;id&gt;/transcript.jsonl</span>
+          {" "}as you go. Refreshing this tab will resume the wizard.
         </p>
       </div>
     );
@@ -287,6 +414,33 @@ export default function PersonaCreate() {
           then extracts a structured persona spec from your answers.
         </p>
       </div>
+
+      {showResumePrompt && persisted ? (
+        <Alert className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <CornerUpLeft className="mt-0.5 h-4 w-4" />
+            <div>
+              <AlertTitle>Resume your in-progress interview?</AlertTitle>
+              <AlertDescription>
+                Saved {new Date(persisted.savedAt).toLocaleString()} for{" "}
+                <span className="font-medium">{persisted.form.name || "untitled"}</span>{" "}
+                — question {persisted.state.question_index + 1} of{" "}
+                {persisted.state.total}.
+              </AlertDescription>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="ghost" onClick={handleDiscardSaved}>
+              <X className="h-4 w-4" />
+              Discard
+            </Button>
+            <Button size="sm" onClick={handleResume}>
+              <CornerUpLeft className="h-4 w-4" />
+              Resume
+            </Button>
+          </div>
+        </Alert>
+      ) : null}
 
       <Card>
         <CardHeader>

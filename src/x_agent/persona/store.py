@@ -3,7 +3,8 @@
 Layout per persona::
 
     <persona_dir>/<persona_id>/
-        spec.json          # PersonaSpec
+        spec.json          # PersonaSpec (structured metadata)
+        personality.md     # long-form narrative profile (writer source of truth)
         transcript.jsonl   # one TranscriptEntry per line
         embeddings.npz     # optional: numpy archive {ids, vectors}
 
@@ -86,6 +87,9 @@ class PersonaStore:
     def _embeddings_path(self, persona_id: str) -> Path:
         return self._persona_dir(persona_id) / "embeddings.npz"
 
+    def _personality_path(self, persona_id: str) -> Path:
+        return self._persona_dir(persona_id) / "personality.md"
+
     def _lock_path(self, persona_id: str) -> Path:
         return self._persona_dir(persona_id) / ".lock"
 
@@ -156,7 +160,59 @@ class PersonaStore:
             tmp.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
             tmp.replace(path)
             self._restrict(path)
+            # Mirror the long-form personality.md alongside the spec when
+            # the field is populated. This keeps the editable artifact in
+            # sync with the structured metadata.
+            md = (spec.personality_md or "").strip()
+            if md:
+                md_path = self._personality_path(spec.id)
+                tmp_md = md_path.with_suffix(".md.tmp")
+                tmp_md.write_text(md + "\n", encoding="utf-8")
+                tmp_md.replace(md_path)
+                self._restrict(md_path)
             log.info("persona.save id=%s", spec.id)
+
+    # -------------------------------------------------------- personality.md
+    def read_personality(self, persona_id: str) -> str:
+        """Return the markdown personality profile for ``persona_id``.
+
+        Falls back to ``spec.personality_md`` if the file is missing
+        (older personas predate the on-disk artifact).
+        """
+        path = self._personality_path(persona_id)
+        if path.is_file():
+            return path.read_text(encoding="utf-8")
+        if not self.exists(persona_id):
+            raise PersonaNotFoundError(persona_id)
+        spec = self.load(persona_id)
+        return spec.personality_md or ""
+
+    def write_personality(self, persona_id: str, markdown: str) -> None:
+        """Overwrite the personality.md profile and mirror it into the spec.
+
+        The writer prompt reads ``personality.md`` directly so this is
+        the user's escape hatch for hand-tuning their persona's voice.
+        We also update ``spec.personality_md`` so the JSON stays
+        consistent.
+        """
+        if not self.exists(persona_id):
+            raise PersonaNotFoundError(persona_id)
+        md = (markdown or "").strip()
+        with self._lock(persona_id):
+            md_path = self._personality_path(persona_id)
+            tmp = md_path.with_suffix(".md.tmp")
+            tmp.write_text(md + ("\n" if md else ""), encoding="utf-8")
+            tmp.replace(md_path)
+            self._restrict(md_path)
+            spec = self.load(persona_id)
+            spec.personality_md = md
+            spec.updated_at = utcnow()
+            spec_path = self._spec_path(persona_id)
+            tmp_spec = spec_path.with_suffix(".json.tmp")
+            tmp_spec.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
+            tmp_spec.replace(spec_path)
+            self._restrict(spec_path)
+            log.info("persona.write_personality id=%s len=%d", persona_id, len(md))
 
     def delete(self, persona_id: str) -> None:
         if not self.exists(persona_id):

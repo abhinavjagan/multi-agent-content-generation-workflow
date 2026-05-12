@@ -1,27 +1,33 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
+  BookOpen,
   ChartLine,
+  Check,
   Edit3,
   Hammer,
   MessageSquare,
   Quote,
+  Save,
   Trash2,
   Wand2,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
   Card,
   CardContent,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Tabs,
   TabsContent,
@@ -44,7 +50,9 @@ import {
   ApiError,
   deletePersona,
   getPersona,
+  getPersonaPersonality,
   getPersonaTranscript,
+  putPersonaPersonality,
   resumeExtract,
 } from "@/lib/api";
 import { formatRelative } from "@/lib/utils";
@@ -71,7 +79,10 @@ export default function PersonaDetail() {
       navigate("/personas");
     },
     onError: (err) => {
-      toast.error(err instanceof ApiError ? err.detail : (err as Error).message);
+      toast.error(err instanceof ApiError ? err.detail : (err as Error).message, {
+        description:
+          "Refresh the list. If the entry sticks, remove ~/.x-agent/personas/<id> by hand.",
+      });
     },
   });
 
@@ -83,7 +94,10 @@ export default function PersonaDetail() {
       qc.invalidateQueries({ queryKey: ["personas"] });
     },
     onError: (err) => {
-      toast.error(err instanceof ApiError ? err.detail : (err as Error).message);
+      toast.error(err instanceof ApiError ? err.detail : (err as Error).message, {
+        description:
+          "Most likely the Ollama generation model isn't pulled. Verify with `ollama list` and check Settings.",
+      });
     },
   });
 
@@ -156,12 +170,17 @@ export default function PersonaDetail() {
         </div>
       </div>
 
-      <Tabs defaultValue="overview">
+      <Tabs defaultValue="personality">
         <TabsList>
+          <TabsTrigger value="personality">Personality</TabsTrigger>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="transcript">Transcript</TabsTrigger>
           <TabsTrigger value="actions">Danger zone</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="personality">
+          <PersonalityTab id={spec.id} />
+        </TabsContent>
 
         <TabsContent value="overview">
           <OverviewTab spec={spec} />
@@ -254,10 +273,15 @@ function OverviewTab({ spec }: { spec: PersonaSpec }) {
     () => [
       { label: "Values", items: spec.values },
       { label: "Opinions", items: spec.opinions },
+      { label: "Conviction signals", items: spec.conviction_signals ?? [] },
       { label: "Domains", items: spec.domains },
       { label: "Topics they love", items: spec.topics_loved },
       { label: "Topics they avoid", items: spec.topics_avoided },
       { label: "Signature phrases", items: spec.signature_phrases },
+      { label: "Idioms & quirks", items: spec.idioms ?? [] },
+      { label: "Enthusiasm tells", items: spec.enthusiasm_tells ?? [] },
+      { label: "Pet peeves", items: spec.pet_peeves ?? [] },
+      { label: "Story seeds", items: spec.story_seeds ?? [] },
       { label: "Banned phrases", items: spec.banned_phrases, tone: "destructive" },
     ],
     [spec],
@@ -346,10 +370,355 @@ function OverviewTab({ spec }: { spec: PersonaSpec }) {
               </p>
             </div>
           ) : null}
+          {spec.cadence ? (
+            <div>
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                Cadence
+              </p>
+              <p className="mt-1 text-sm leading-relaxed">{spec.cadence}</p>
+            </div>
+          ) : null}
+          {spec.emotional_range ? (
+            <div>
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                Emotional range
+              </p>
+              <p className="mt-1 text-sm leading-relaxed">{spec.emotional_range}</p>
+            </div>
+          ) : null}
+          {spec.apology_pattern ? (
+            <div>
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                Apology pattern
+              </p>
+              <p className="mt-1 text-sm leading-relaxed">{spec.apology_pattern}</p>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
     </div>
   );
+}
+
+function PersonalityTab({ id }: { id: string }) {
+  const qc = useQueryClient();
+  const profile = useQuery({
+    queryKey: ["persona", id, "personality"],
+    queryFn: () => getPersonaPersonality(id),
+    enabled: !!id,
+  });
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  useEffect(() => {
+    if (!editing && profile.data) {
+      setDraft(profile.data.markdown);
+    }
+  }, [profile.data, editing]);
+
+  const saveMutation = useMutation({
+    mutationFn: () => putPersonaPersonality(id, draft),
+    onSuccess: (resp) => {
+      qc.setQueryData(["persona", id, "personality"], resp);
+      qc.invalidateQueries({ queryKey: ["persona", id] });
+      qc.invalidateQueries({ queryKey: ["personas"] });
+      setEditing(false);
+      toast.success("Saved personality.md.", {
+        description: "The writer prompt picks up your edits on the next draft.",
+      });
+    },
+    onError: (err) => {
+      toast.error(
+        err instanceof ApiError ? err.detail : (err as Error).message,
+        {
+          description:
+            "Check the markdown length (≤40k chars) and that the server is reachable.",
+        },
+      );
+    },
+  });
+
+  if (profile.isLoading) {
+    return (
+      <div className="space-y-2">
+        <Skeleton className="h-8 w-1/3" />
+        <Skeleton className="h-64 w-full" />
+      </div>
+    );
+  }
+
+  if (profile.error) {
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>Couldn't load personality.md</AlertTitle>
+        <AlertDescription>
+          {profile.error instanceof ApiError
+            ? profile.error.detail
+            : (profile.error as Error).message}
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  const md = profile.data?.markdown ?? "";
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <BookOpen className="h-5 w-5 text-primary" />
+              personality.md
+            </CardTitle>
+            <CardDescription>
+              The long-form profile the writer prompt reads. Hand-edit freely;
+              changes apply to the next draft.
+            </CardDescription>
+          </div>
+          {!editing ? (
+            <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+              <Edit3 className="h-4 w-4" />
+              Edit
+            </Button>
+          ) : null}
+        </div>
+      </CardHeader>
+      <CardContent>
+        {md.trim().length === 0 && !editing ? (
+          <EmptyState
+            icon={<BookOpen className="h-5 w-5" />}
+            title="No personality.md yet"
+            description="Re-run the interview or click Refine to produce one."
+          />
+        ) : editing ? (
+          <Textarea
+            autoSize
+            rows={20}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            className="font-mono text-sm leading-relaxed"
+            maxLength={40_000}
+          />
+        ) : (
+          <article className="prose-personality">
+            <RenderMarkdown markdown={md} />
+          </article>
+        )}
+      </CardContent>
+      {editing ? (
+        <CardFooter className="flex-wrap gap-2">
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setEditing(false);
+              setDraft(md);
+            }}
+            disabled={saveMutation.isPending}
+          >
+            <X className="h-4 w-4" />
+            Cancel
+          </Button>
+          <Button
+            onClick={() => saveMutation.mutate()}
+            loading={saveMutation.isPending}
+            disabled={draft.trim() === md.trim()}
+          >
+            <Save className="h-4 w-4" />
+            Save changes
+          </Button>
+          <p className="ml-auto text-[11px] text-muted-foreground">
+            {draft.length}/40,000
+          </p>
+        </CardFooter>
+      ) : md.trim().length > 0 ? (
+        <CardFooter>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(md);
+                toast.success("Copied personality.md to clipboard.");
+              } catch {
+                toast.error("Clipboard not available.");
+              }
+            }}
+          >
+            <Check className="h-4 w-4" />
+            Copy markdown
+          </Button>
+        </CardFooter>
+      ) : null}
+    </Card>
+  );
+}
+
+/**
+ * Tiny, dependency-free markdown renderer.
+ *
+ * We render exactly the constructs ``render_personality_md`` produces:
+ * ``#``/``##``/``###`` headings, ``-`` bullets, ``>`` blockquotes,
+ * bold via ``**text**``, italic via ``_text_``, and inline code via
+ * backticks. Anything else falls through as plain text. This keeps us
+ * off the npm bandwagon while giving the user a readable rendering.
+ * All output is text-content only, so it's XSS-safe by construction.
+ */
+function RenderMarkdown({ markdown }: { markdown: string }) {
+  const lines = markdown.split("\n");
+  const out: React.ReactNode[] = [];
+  let i = 0;
+  let key = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^#\s/.test(line)) {
+      out.push(
+        <h1 key={key++} className="mt-4 text-2xl font-semibold tracking-tight">
+          {renderInline(line.slice(2))}
+        </h1>,
+      );
+      i++;
+      continue;
+    }
+    if (/^##\s/.test(line)) {
+      out.push(
+        <h2 key={key++} className="mt-6 border-b border-border/40 pb-1 text-lg font-semibold tracking-tight">
+          {renderInline(line.slice(3))}
+        </h2>,
+      );
+      i++;
+      continue;
+    }
+    if (/^###\s/.test(line)) {
+      out.push(
+        <h3 key={key++} className="mt-4 text-base font-semibold">
+          {renderInline(line.slice(4))}
+        </h3>,
+      );
+      i++;
+      continue;
+    }
+    if (/^-\s/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^-\s/.test(lines[i])) {
+        items.push(lines[i].slice(2));
+        i++;
+      }
+      out.push(
+        <ul key={key++} className="my-2 list-disc space-y-1 pl-5 text-sm leading-relaxed">
+          {items.map((it, ii) => (
+            <li key={ii}>{renderInline(it)}</li>
+          ))}
+        </ul>,
+      );
+      continue;
+    }
+    if (/^>\s?/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) {
+        items.push(lines[i].replace(/^>\s?/, ""));
+        i++;
+      }
+      out.push(
+        <blockquote
+          key={key++}
+          className="surface-glass my-2 rounded-md border-l-2 border-primary/60 px-3 py-2 text-sm italic leading-relaxed text-muted-foreground"
+        >
+          {items.map((it, ii) => (
+            <p key={ii}>{renderInline(it)}</p>
+          ))}
+        </blockquote>,
+      );
+      continue;
+    }
+    if (line.trim() === "") {
+      out.push(<div key={key++} className="h-2" />);
+      i++;
+      continue;
+    }
+    if (line.trim() === "---") {
+      out.push(<Separator key={key++} className="my-4" />);
+      i++;
+      continue;
+    }
+    out.push(
+      <p key={key++} className="my-1 text-sm leading-relaxed">
+        {renderInline(line)}
+      </p>,
+    );
+    i++;
+  }
+  return <div>{out}</div>;
+}
+
+function renderInline(line: string): React.ReactNode {
+  // Process ``code`` first so subsequent regexes don't eat the backticks.
+  const tokens: React.ReactNode[] = [];
+  const codeRegex = /`([^`]+)`/g;
+  let lastEnd = 0;
+  let match: RegExpExecArray | null;
+  let key = 0;
+  while ((match = codeRegex.exec(line)) !== null) {
+    if (match.index > lastEnd) {
+      tokens.push(emphasizeText(line.slice(lastEnd, match.index), key++));
+    }
+    tokens.push(
+      <code
+        key={`c${key++}`}
+        className="rounded bg-muted px-1 py-0.5 font-mono text-xs"
+      >
+        {match[1]}
+      </code>,
+    );
+    lastEnd = match.index + match[0].length;
+  }
+  if (lastEnd < line.length) {
+    tokens.push(emphasizeText(line.slice(lastEnd), key++));
+  }
+  return <>{tokens}</>;
+}
+
+function emphasizeText(text: string, key: number): React.ReactNode {
+  const out: React.ReactNode[] = [];
+  // Split on bold first (``**text**``) then italic (``_text_``).
+  const boldRegex = /\*\*([^*]+)\*\*/g;
+  let lastEnd = 0;
+  let m: RegExpExecArray | null;
+  let k = 0;
+  while ((m = boldRegex.exec(text)) !== null) {
+    if (m.index > lastEnd) {
+      out.push(italicize(text.slice(lastEnd, m.index), `${key}-${k++}`));
+    }
+    out.push(
+      <strong key={`b${key}-${k++}`} className="font-semibold text-foreground">
+        {m[1]}
+      </strong>,
+    );
+    lastEnd = m.index + m[0].length;
+  }
+  if (lastEnd < text.length) {
+    out.push(italicize(text.slice(lastEnd), `${key}-${k++}`));
+  }
+  return <span key={`s${key}`}>{out}</span>;
+}
+
+function italicize(text: string, key: string): React.ReactNode {
+  const out: React.ReactNode[] = [];
+  const italicRegex = /_([^_]+)_/g;
+  let lastEnd = 0;
+  let m: RegExpExecArray | null;
+  let k = 0;
+  while ((m = italicRegex.exec(text)) !== null) {
+    if (m.index > lastEnd) out.push(text.slice(lastEnd, m.index));
+    out.push(
+      <em key={`i${key}-${k++}`} className="italic">
+        {m[1]}
+      </em>,
+    );
+    lastEnd = m.index + m[0].length;
+  }
+  if (lastEnd < text.length) out.push(text.slice(lastEnd));
+  return <span key={`t${key}`}>{out}</span>;
 }
 
 function DataRow({

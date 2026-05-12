@@ -1,14 +1,16 @@
 """Application configuration loaded from environment variables.
 
-All secrets (X API tokens) are loaded here and never logged. The
-``Settings`` object is the single source of truth for runtime config.
+The ``Settings`` object is the single source of truth for runtime
+config. x-agent never publishes anywhere, so there are no API secrets
+here -- only local Ollama, persona, and (optional) research provider
+knobs.
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,9 +18,7 @@ class Settings(BaseSettings):
     """Runtime settings.
 
     Values are loaded (in order of precedence) from process env vars,
-    then a local ``.env`` file. Missing X API tokens are *not* fatal at
-    construction time -- callers that need them must check ``has_x_credentials``
-    so that ``--dry-run`` flows still work without secrets.
+    then a local ``.env`` file.
     """
 
     model_config = SettingsConfigDict(
@@ -41,20 +41,19 @@ class Settings(BaseSettings):
         ),
     )
 
-    # --- X (Twitter) API v2 OAuth 1.0a user-context tokens ---
-    x_api_key: SecretStr | None = Field(default=None)
-    x_api_secret: SecretStr | None = Field(default=None)
-    x_access_token: SecretStr | None = Field(default=None)
-    x_access_token_secret: SecretStr | None = Field(default=None)
-
-    # --- Behavior ---
-    x_max_tweet_chars: int = Field(
+    # --- Formatter / output shape ---
+    # Standard X limit is 280; we leave a small safety margin for thread
+    # numbering and trailing whitespace. Tunable via MAX_TWEET_CHARS in
+    # .env. The legacy X_MAX_TWEET_CHARS name is also accepted so existing
+    # .env files keep working after the rename.
+    max_tweet_chars: int = Field(
         default=275,
         ge=50,
         le=280,
+        validation_alias=AliasChoices("MAX_TWEET_CHARS", "X_MAX_TWEET_CHARS"),
         description=(
-            "Hard ceiling per tweet. Standard X limit is 280; we leave a small "
-            "safety margin for thread numbering and trailing whitespace."
+            "Hard ceiling per tweet output, used by the thread formatter. "
+            "Defaults to 275 so a 280-char post leaves room for numbering."
         ),
     )
 
@@ -119,19 +118,6 @@ class Settings(BaseSettings):
         default=8000, ge=500, le=32_000,
         description="Truncation cap for extracted article text per source.",
     )
-
-    @property
-    def has_x_credentials(self) -> bool:
-        """True only if all four OAuth 1.0a tokens are present."""
-        return all(
-            v is not None and v.get_secret_value().strip() != ""
-            for v in (
-                self.x_api_key,
-                self.x_api_secret,
-                self.x_access_token,
-                self.x_access_token_secret,
-            )
-        )
 
 
 @lru_cache(maxsize=1)

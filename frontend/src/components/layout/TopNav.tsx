@@ -29,16 +29,25 @@ export function TopNav() {
   });
 
   const ollamaOk = health.data?.ollama.ok && health.data.ollama.has_configured_model;
-  const xOk = health.data?.x.has_credentials;
+  const personaCount = health.data?.personas.count ?? 0;
 
   return (
-    <header className="sticky top-0 z-30 border-b border-border/70 bg-background/85 backdrop-blur">
+    <header className="surface-glass sticky top-0 z-30 border-b border-border/70 backdrop-blur">
       <div className="container flex h-14 items-center gap-6">
         <NavLink to="/" className="flex items-center gap-2 font-semibold tracking-tight">
-          <span className="grid h-7 w-7 place-items-center rounded-md bg-primary text-primary-foreground shadow-sm">
+          <span
+            className="grid h-7 w-7 place-items-center rounded-md text-primary-foreground shadow-[0_4px_14px_-2px_hsl(var(--accent-pink)/0.55)]"
+            style={{
+              background:
+                "conic-gradient(from 215deg at 50% 50%, hsl(248 92% 62%), hsl(322 88% 62%), hsl(195 95% 55%), hsl(248 92% 62%))",
+            }}
+            aria-hidden
+          >
             <span className="text-[15px] leading-none">×</span>
           </span>
-          <span className="hidden sm:inline">x-agent</span>
+          <span className="hidden bg-gradient-to-r from-primary via-pink-500 to-cyan-400 bg-clip-text text-transparent sm:inline">
+            x-agent
+          </span>
         </NavLink>
 
         <nav className="flex items-center gap-0.5">
@@ -51,8 +60,8 @@ export function TopNav() {
                 cn(
                   "inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
                   isActive
-                    ? "bg-secondary text-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                    ? "bg-primary/15 text-primary shadow-[inset_0_-2px_0_0_hsl(var(--primary))]"
+                    : "text-muted-foreground hover:bg-primary/10 hover:text-primary",
                 )
               }
             >
@@ -75,14 +84,11 @@ export function TopNav() {
               Ollama
             </Badge>
             <Badge
-              variant={xOk ? "success" : "muted"}
-              title={
-                xOk
-                  ? "X credentials configured"
-                  : "No X credentials - posts forced to dry-run"
-              }
+              variant={personaCount > 0 ? "default" : "muted"}
+              title={`${personaCount} persona${personaCount === 1 ? "" : "s"} saved`}
             >
-              <CircleDot className="h-3 w-3" />X
+              <CircleDot className="h-3 w-3" />
+              {personaCount} persona{personaCount === 1 ? "" : "s"}
             </Badge>
           </div>
           <ThemeToggle />
