@@ -79,7 +79,7 @@ Files are `0600`, directories `0700`. Persona contents are never logged. Back th
 
 - [docs/architecture.md](docs/architecture.md) — the LangGraph state machine, nodes, and runtime layout (including native-only deployment).
 - [docs/persona.md](docs/persona.md) — how the interview, the markdown profile, the critic, and the embedded retrieval index fit together.
-- [docs/research.md](docs/research.md) — optional web research, SSRF/DoS guards, provider selection.
+- [docs/research.md](docs/research.md) — optional web research, SSRF/DoS guards, provider selection, and X/Twitter source intake.
 - [docs/hardening.md](docs/hardening.md) — container posture, secret handling, what is and isn't logged.
 - [docs/testing.md](docs/testing.md) — `pytest`, smoke scripts, frontend type-check, what each one actually exercises.
 
