@@ -37,6 +37,33 @@ x-agent generate "engineering culture" --query "founder mode vs manager mode"
 
 The same fields are exposed on `POST /api/draft` (`research_enabled`, `research_urls`, `research_query`). `POST /api/research/preview` returns just the source list (titles + URLs + snippets) without invoking the LLM — the UI uses it to show what was found before generation starts. Source cards are rendered under the review screen.
 
+## X/Twitter source workflow
+
+Use X/Twitter as reviewed source material, not as a publishing path. x-agent
+still never receives X credentials and never posts for you.
+
+One safe workflow:
+
+1. Use an external tool to discover candidate public posts. For OpenClaw users,
+   [TweetClaw](https://github.com/Xquik-dev/tweetclaw) can search tweets,
+   threads, replies, trends, and user timelines behind OpenClaw's normal tool
+   approval flow.
+2. Review the returned posts yourself. Keep only public URLs or short factual
+   notes that are safe to show the draft writer.
+3. Pass selected source URLs to x-agent's URL mode:
+
+```bash
+x-agent generate "explain the launch feedback pattern" \
+    --url https://x.com/example/status/1234567890 \
+    --url https://x.com/example/status/2345678901
+```
+
+If a social page does not fetch cleanly, summarize the reviewed facts in the
+topic or style hint and keep the original source list next to the review card.
+Do not paste API keys, cookies, private DMs, or raw account exports into the
+prompt. The final post still goes through x-agent's human review step and is
+copied or opened in X compose by the user.
+
 ## Hardening
 
 The research subsystem treats every URL as hostile until proven otherwise. From `src/x_agent/research/`:
