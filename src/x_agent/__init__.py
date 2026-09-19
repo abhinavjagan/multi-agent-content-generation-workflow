@@ -1,3 +1,3 @@
-"""x-agent: a LangGraph + Ollama agent that drafts and posts short blogs to X."""
+"""x-agent: a local LangGraph + Ollama drafting and human-review tool."""
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"

@@ -1,0 +1,50 @@
+{
+  "experiment_slug": "packet-panic",
+  "audience": "Developers, infrastructure engineers, SREs, and technically curious daily-game players.",
+  "hypothesis": "A 30–60 second daily routing puzzle can earn repeat play, voluntary sharing, and credible sponsor interest without obstructive advertising.",
+  "canonical_url": "https://cramzz.space/e/packet-panic/",
+  "launch_starts_at": "2026-09-20T00:00:00Z",
+  "launch_ends_at": "2026-10-04T00:00:00Z",
+  "verified_facts": [
+    {
+      "id": "six-hop-ttl",
+      "claim": "Packet Panic gives the player no more than six hops to reach the destination.",
+      "source": "cramzz-exp-packet-panic/src/game.ts"
+    },
+    {
+      "id": "daily-deterministic",
+      "claim": "Every UTC date produces one deterministic graph with at least one valid route and a deliberate losing route.",
+      "source": "cramzz-exp-packet-panic/tests/game.test.ts"
+    },
+    {
+      "id": "no-account",
+      "claim": "The game requires no account and stores gameplay progress locally in the browser.",
+      "source": "cramzz-exp-packet-panic/PRIVACY.md"
+    },
+    {
+      "id": "target-duration",
+      "claim": "The intended play time is approximately 30–60 seconds.",
+      "source": "cramzz-exp-packet-panic/EXPERIMENT.md"
+    },
+    {
+      "id": "validation-window",
+      "claim": "The public experiment uses a fourteen-day validation window and a predeclared decision scorecard.",
+      "source": "cramzz-ops/scorecards/PACKET_PANIC.md"
+    }
+  ],
+  "tone_constraints": [
+    "Write as Abhinav in plain, technically literate language.",
+    "Introduce Cramzz as a recurring series about building small internet experiments in public.",
+    "Be curious rather than grandiose.",
+    "State that the experiment may fail when discussing validation.",
+    "Tailor replies to the exact parent post."
+  ],
+  "prohibited_claims": [
+    "guaranteed viral",
+    "best networking game",
+    "industry-leading",
+    "everyone is playing",
+    "official partner"
+  ],
+  "sponsor_disclosure": "Use “Sponsored” for paid placements. In unsponsored company outreach, say “No affiliation” when the context could imply endorsement."
+}
