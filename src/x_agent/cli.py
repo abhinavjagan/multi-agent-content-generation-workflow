@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
 import uuid
+from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
@@ -18,6 +20,8 @@ from rich.table import Table
 from rich.text import Text
 
 from .config import get_settings
+from .campaigns import ApprovalQueue, CampaignBrief, ContentItem
+from .campaigns.models import validate_item_against_brief
 from .graph import build_graph
 from .interview_graph import build_interview_graph, initial_interview_state
 from .persona.store import PersonaNotFoundError, get_default_store
@@ -62,8 +66,156 @@ persona_app = typer.Typer(
     add_completion=False,
     help="Manage cloned-persona profiles used to condition drafts.",
 )
+campaign_app = typer.Typer(
+    add_completion=False,
+    help="Validate Cramzz briefs and manage the local exact-copy approval queue.",
+)
 app.add_typer(persona_app, name="persona")
+app.add_typer(campaign_app, name="campaign")
 console = Console()
+
+
+def _campaign_queue(directory: Path) -> ApprovalQueue:
+    root = directory.expanduser()
+    return ApprovalQueue(root / "queue.json", root / "audit.jsonl")
+
+
+def _load_json_model(path: Path, model_type):
+    try:
+        payload = json.loads(path.expanduser().read_text(encoding="utf-8"))
+        return model_type.model_validate(payload)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        raise typer.BadParameter(f"invalid {path}: {exc}") from exc
+
+
+def _campaign_item_panel(item: ContentItem, *, full_hash: bool = False) -> Panel:
+    """Render hash-bound content literally; Rich markup must never alter it."""
+    body = Text("copy:\n", style="dim")
+    body.append(item.exact_copy)
+    if full_hash:
+        approval_fields = {
+            "id": item.id,
+            "experiment_slug": item.experiment_slug,
+            "channel": item.channel,
+            "content_type": item.content_type.value,
+            "context_url": str(item.context_url) if item.context_url else None,
+            "media_url": str(item.media_url) if item.media_url else None,
+            "alt_text": item.alt_text,
+            "evidence_refs": sorted(item.evidence_refs),
+            "sponsor_related": item.sponsor_related,
+        }
+        for field, value in approval_fields.items():
+            body.append(f"\n{field}: ", style="dim")
+            body.append(json.dumps(value, ensure_ascii=False, sort_keys=True))
+    elif item.context_url:
+        body.append("\nparent: ", style="dim")
+        body.append(str(item.context_url), style="dim")
+    digest = item.content_hash() if full_hash else item.content_hash()[:12]
+    return Panel(body, title=Text(f"{item.id} · {digest}"))
+
+
+@campaign_app.command("validate")
+def campaign_validate(
+    brief_path: Path = typer.Argument(..., exists=True, dir_okay=False),
+    item_path: Optional[Path] = typer.Option(None, "--item", exists=True, dir_okay=False),
+) -> None:
+    """Validate a campaign brief and, optionally, one exact content item."""
+    brief = _load_json_model(brief_path, CampaignBrief)
+    if item_path is None:
+        console.print(f"[green]Valid brief:[/] {brief.experiment_slug} ({len(brief.verified_facts)} verified facts)")
+        return
+    item = _load_json_model(item_path, ContentItem)
+    blockers = validate_item_against_brief(item, brief)
+    if blockers:
+        for blocker in blockers:
+            console.print(f"[red]Blocked:[/] {blocker}")
+        raise typer.Exit(code=1)
+    console.print(f"[green]Eligible for review:[/] {item.id} ({item.content_hash()[:12]})")
+
+
+@campaign_app.command("enqueue")
+def campaign_enqueue(
+    brief_path: Path = typer.Option(..., "--brief", exists=True, dir_okay=False),
+    item_path: Path = typer.Option(..., "--item", exists=True, dir_okay=False),
+    directory: Path = typer.Option(Path("~/.x-agent/campaigns"), "--directory"),
+) -> None:
+    """Add a validated draft to the private local queue."""
+    brief = _load_json_model(brief_path, CampaignBrief)
+    item = _load_json_model(item_path, ContentItem)
+    try:
+        _campaign_queue(directory).add(item, brief)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Queued draft:[/] {item.id}")
+
+
+@campaign_app.command("list")
+def campaign_list(
+    directory: Path = typer.Option(Path("~/.x-agent/campaigns"), "--directory"),
+) -> None:
+    """Show exact copy grouped into draft, pending, approved, and published states."""
+    groups = _campaign_queue(directory).grouped()
+    for status, items in groups.items():
+        if not items:
+            continue
+        console.rule(status)
+        for item in items:
+            console.print(_campaign_item_panel(item))
+
+
+@campaign_app.command("submit")
+def campaign_submit(
+    item_id: str,
+    directory: Path = typer.Option(Path("~/.x-agent/campaigns"), "--directory"),
+) -> None:
+    """Move one draft into pending approval."""
+    try:
+        item = _campaign_queue(directory).submit(item_id)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[yellow]Pending exact-copy approval:[/] {item.id} ({item.content_hash()[:12]})")
+
+
+@campaign_app.command("approve")
+def campaign_approve(
+    item_ids: list[str] = typer.Argument(...),
+    approver: str = typer.Option(..., "--approver", help="Human who reviewed the exact displayed copy."),
+    directory: Path = typer.Option(Path("~/.x-agent/campaigns"), "--directory"),
+) -> None:
+    """Approve exact item hashes for at most 24 hours. This never publishes."""
+    queue = _campaign_queue(directory)
+    missing = [item_id for item_id in item_ids if item_id not in queue.items]
+    if missing:
+        raise typer.BadParameter(f"unknown content item(s): {', '.join(missing)}")
+    displayed_hashes: dict[str, str] = {}
+    for item_id in item_ids:
+        item = queue.items[item_id]
+        displayed_hashes[item.id] = item.content_hash()
+        console.print(_campaign_item_panel(item, full_hash=True))
+    if not Confirm.ask("Approve exactly this outgoing batch for 24 hours?", default=False):
+        raise typer.Abort()
+    try:
+        record = queue.approve(
+            item_ids,
+            approver=approver,
+            expected_hashes=displayed_hashes,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Approved[/] until {record.expires_at.isoformat()}. Nothing was sent.")
+
+
+@campaign_app.command("mark-published")
+def campaign_mark_published(
+    item_id: str,
+    directory: Path = typer.Option(Path("~/.x-agent/campaigns"), "--directory"),
+) -> None:
+    """Record a human-confirmed send; this command performs no network action."""
+    try:
+        item = _campaign_queue(directory).mark_published(item_id)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(f"[green]Recorded as published:[/] {item.id}")
 
 
 def _print_draft(posts: list[str], topic: str, mode: str) -> None:

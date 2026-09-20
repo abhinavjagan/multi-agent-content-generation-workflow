@@ -1,0 +1,17 @@
+{
+  "id": "packet-panic-launch-post-v1",
+  "experiment_slug": "packet-panic",
+  "channel": "x",
+  "content_type": "post",
+  "copy": "Cramzz is my recurring series: building small internet experiments in public, giving each 14 days to earn its next step, then sharing the receipts. First: Packet Panic. Route a packet around congestion and broken links in six hops. No account. https://cramzz.space/e/packet-panic/",
+  "context_url": null,
+  "media_url": "https://cramzz.space/e/packet-panic/packet-panic-card.png",
+  "alt_text": "Packet Panic network puzzle showing a source, destination, congested links, and a six-hop limit.",
+  "evidence_refs": [
+    "six-hop-ttl",
+    "no-account",
+    "validation-window"
+  ],
+  "sponsor_related": false,
+  "status": "draft"
+}
